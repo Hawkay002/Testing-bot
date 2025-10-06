@@ -1,14 +1,15 @@
 import { Telegraf, Markup } from "telegraf";
+import express from "express";
 import fs from "fs";
 
 // === Bot Configuration ===
-const TOKEN = process.env.BOT_TOKEN; // <-- secure way to load your token
+const TOKEN = process.env.BOT_TOKEN;
 if (!TOKEN) {
   console.error("❌ BOT_TOKEN not found! Please set it in Render environment variables.");
   process.exit(1);
 }
 
-const IMAGE_PATH = "Wishing Birthday.png"; // Must be in same folder
+const IMAGE_PATH = "Wishing Birthday.png";
 const TRIGGER_MESSAGE = "10/10/2002";
 const AUTHORIZED_NUMBERS = ["+918777072747", "+918777845713"];
 const ADMIN_CHAT_ID = 1299129410;
@@ -16,11 +17,16 @@ const START_TIME = Date.now();
 
 // === Create bot instance ===
 const bot = new Telegraf(TOKEN);
-
-// === User state tracking ===
 const userStates = {}; // user_id -> "awaiting_contact" | "awaiting_name" | null
 
-// === Helper: Main Info Menu Buttons ===
+// === Keep-Alive Server ===
+const app = express();
+app.get("/", (req, res) => res.send("✅ Bot server is alive and running!"));
+
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, () => console.log(`🌐 Keep-alive server running on port ${PORT}`));
+
+// === Helper: Main Menu Buttons ===
 function getMainMenu() {
   return Markup.inlineKeyboard([
     [
@@ -36,30 +42,20 @@ function getMainMenu() {
 }
 
 // === /start Command ===
-bot.start(async (ctx) => {
-  await ctx.reply("Hi! Send the secret word you just copied to get your card! ❤️❤️❤️");
-});
+bot.start((ctx) => ctx.reply("Hi! Send the secret word you just copied to get your card! ❤️❤️❤️"));
 
 // === Handle Text Messages ===
 bot.on("text", async (ctx) => {
   const userId = ctx.from.id;
   const text = ctx.message.text.trim().toLowerCase();
 
-  // Step 1: If awaiting name confirmation
+  // Step 1: Awaiting name
   if (userStates[userId] === "awaiting_name") {
     if (text === "y") {
       await ctx.reply("✅ Identity confirmed! Preparing your card... 💫");
       delete userStates[userId];
-
       await new Promise((r) => setTimeout(r, 2500));
-
-      await ctx.replyWithPhoto(
-        { source: IMAGE_PATH },
-        {
-          caption: "🎁 Your card is ready — Tap to reveal!",
-          has_spoiler: true,
-        }
-      );
+      await ctx.replyWithPhoto({ source: IMAGE_PATH }, { caption: "🎁 Your card is ready — Tap to reveal!", has_spoiler: true });
 
       const ratingKeyboard = Markup.inlineKeyboard([
         [
@@ -81,7 +77,7 @@ bot.on("text", async (ctx) => {
     return;
   }
 
-  // Step 2: If awaiting contact but sends text instead
+  // Step 2: Awaiting contact
   if (userStates[userId] === "awaiting_contact") {
     await ctx.reply('Please use the "Share Contact" button to send your number.');
     return;
@@ -94,12 +90,7 @@ bot.on("text", async (ctx) => {
     await ctx.reply("⌛ Waiting to receive response...");
     await new Promise((r) => setTimeout(r, 1500));
 
-    const contactButton = Markup.keyboard([
-      [Markup.button.contactRequest("Share Contact")],
-    ])
-      .oneTime()
-      .resize();
-
+    const contactButton = Markup.keyboard([[Markup.button.contactRequest("Share Contact")]]).oneTime().resize();
     await ctx.reply("Please share your phone number to continue:", contactButton);
     userStates[userId] = "awaiting_contact";
     return;
@@ -137,7 +128,7 @@ bot.on("contact", async (ctx) => {
   }
 });
 
-// === Handle Rating Buttons ===
+// === Handle Ratings ===
 bot.action(/^rating_/, async (ctx) => {
   const rating = ctx.match.input.split("_")[1];
   const username = ctx.from.username || ctx.from.first_name;
@@ -151,63 +142,50 @@ bot.action(/^rating_/, async (ctx) => {
 });
 
 // === Info Buttons ===
-bot.action(["info", "description", "master", "uptime", "socials", "back_to_menu"], async (ctx) => {
+bot.action(["info","description","master","uptime","socials","back_to_menu"], async (ctx) => {
   const data = ctx.match.input;
-
   const uptimeSeconds = Math.floor((Date.now() - START_TIME) / 1000);
   const hours = Math.floor(uptimeSeconds / 3600);
   const minutes = Math.floor((uptimeSeconds % 3600) / 60);
   const seconds = uptimeSeconds % 60;
   const uptimeStr = `${hours}h ${minutes}m ${seconds}s`;
 
-  const backButton = Markup.inlineKeyboard([
-    [Markup.button.callback("⬅️ Back", "back_to_menu")],
-  ]);
+  const backButton = Markup.inlineKeyboard([[Markup.button.callback("⬅️ Back","back_to_menu")]]);
 
-  if (data === "info") {
-    await ctx.editMessageText(
-      "🤖 *Bot Info*\n\nThis bot was specially made for sending personalized *birthday wish cards* to that person who deserves a surprise 🎉🎂.",
-      { parse_mode: "Markdown", ...backButton }
-    );
-  } else if (data === "description") {
-    await ctx.editMessageText(
-      "💬 *Description*\n\nA fun, interactive bot built to deliver surprise birthday wishes with love 💫",
-      { parse_mode: "Markdown", ...backButton }
-    );
-  } else if (data === "master") {
-    await ctx.editMessageText("👤 *Master*\n\nMade by **Shovith (Sid)** ✨", {
-      parse_mode: "Markdown",
-      ...backButton,
-    });
-  } else if (data === "uptime") {
-    await ctx.editMessageText(`⏱ *Uptime*\n\nYou've been using this bot for past \`${uptimeStr}\`.`, {
-      parse_mode: "Markdown",
-      ...backButton,
-    });
-  } else if (data === "socials") {
-    await ctx.editMessageText(
-      "*🌐 Master’s Socials*\n\nChoose a platform to connect:",
-      {
-        parse_mode: "Markdown",
-        reply_markup: Markup.inlineKeyboard([
-          [
-            Markup.button.url("WhatsApp", "https://wa.me/918777845713"),
-            Markup.button.url("Telegram", "https://t.me/X_o_xo_002"),
-          ],
-          [Markup.button.url("Website", "https://hawkay002.github.io/Connect/")],
-          [Markup.button.callback("⬅️ Back", "back_to_menu")],
-        ]),
-      }
-    );
-  } else if (data === "back_to_menu") {
-    await ctx.editMessageText("You can check out more details below 👇", getMainMenu());
-  }
+  if (data === "info") await ctx.editMessageText(
+    "🤖 *Bot Info*\n\nThis bot was specially made for sending personalized *birthday wish cards* to that person who deserves a surprise 🎉🎂.",
+    { parse_mode:"Markdown", ...backButton }
+  );
+  else if (data === "description") await ctx.editMessageText(
+    "💬 *Description*\n\nA fun, interactive bot built to deliver surprise birthday wishes with love 💫",
+    { parse_mode:"Markdown", ...backButton }
+  );
+  else if (data === "master") await ctx.editMessageText(
+    "👤 *Master*\n\nMade by **Shovith (Sid)** ✨",
+    { parse_mode:"Markdown", ...backButton }
+  );
+  else if (data === "uptime") await ctx.editMessageText(
+    `⏱ *Uptime*\n\nYou've been using this bot for past \`${uptimeStr}\`.`,
+    { parse_mode:"Markdown", ...backButton }
+  );
+  else if (data === "socials") await ctx.editMessageText(
+    "*🌐 Master’s Socials*\n\nChoose a platform to connect:",
+    {
+      parse_mode:"Markdown",
+      reply_markup: Markup.inlineKeyboard([
+        [Markup.button.url("WhatsApp","https://wa.me/918777845713"), Markup.button.url("Telegram","https://t.me/X_o_xo_002")],
+        [Markup.button.url("Website","https://hawkay002.github.io/Connect/")],
+        [Markup.button.callback("⬅️ Back","back_to_menu")]
+      ])
+    }
+  );
+  else if (data === "back_to_menu") await ctx.editMessageText("You can check out more details below 👇", getMainMenu());
 });
 
 // === Start Bot ===
 bot.launch();
 console.log("🤖 Bot is running...");
 
-// Graceful shutdown for Render/other hosts
+// Graceful shutdown
 process.once("SIGINT", () => bot.stop("SIGINT"));
 process.once("SIGTERM", () => bot.stop("SIGTERM"));
