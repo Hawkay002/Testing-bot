@@ -2,7 +2,12 @@ import { Telegraf, Markup } from "telegraf";
 import fs from "fs";
 
 // === Bot Configuration ===
-const TOKEN = "8252936732:AAHVgIDlVwAlWi4HSywj7nVO6sIJWB_v0NM";
+const TOKEN = process.env.BOT_TOKEN; // <-- secure way to load your token
+if (!TOKEN) {
+  console.error("❌ BOT_TOKEN not found! Please set it in Render environment variables.");
+  process.exit(1);
+}
+
 const IMAGE_PATH = "Wishing Birthday.png"; // Must be in same folder
 const TRIGGER_MESSAGE = "10/10/2002";
 const AUTHORIZED_NUMBERS = ["+918777072747", "+918777845713"];
