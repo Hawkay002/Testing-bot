@@ -35,13 +35,16 @@ function getMainMenu() {
 }
 
 // === /start Command ===
-bot.start((ctx) => ctx.reply("Hi! Send the secret word you just copied to get your card! ❤️❤️❤️", getMainMenu()));
+bot.start((ctx) => {
+  ctx.reply("Hi! Send the secret word you just copied to get your card! ❤️❤️❤️");
+});
 
 // === Handle Text Messages ===
 bot.on("text", async (ctx) => {
   const userId = ctx.from.id;
   const text = ctx.message.text.trim().toLowerCase();
 
+  // Awaiting name confirmation
   if (userStates[userId] === "awaiting_name") {
     if (text === "y") {
       await ctx.reply("✅ Identity confirmed! Preparing your card... 💫");
@@ -69,11 +72,13 @@ bot.on("text", async (ctx) => {
     return;
   }
 
+  // Awaiting contact
   if (userStates[userId] === "awaiting_contact") {
     await ctx.reply('Please use the "Share Contact" button to send your number.');
     return;
   }
 
+  // Trigger message flow
   if (text === TRIGGER_MESSAGE.toLowerCase()) {
     await ctx.reply("🔍 Checking database to find matches...");
     await new Promise((r) => setTimeout(r, 1500));
@@ -86,6 +91,7 @@ bot.on("text", async (ctx) => {
     return;
   }
 
+  // Non-trigger message: show warning + main menu buttons
   await ctx.reply("I only respond to the specific trigger message.");
   await ctx.reply("You can check out more details below 👇", getMainMenu());
 });
@@ -171,7 +177,7 @@ bot.action(["info","description","master","uptime","socials","back_to_menu"], as
       break;
 
     case "socials":
-      // Only show social media links after clicking this button
+      // Show social media links only after clicking this button
       await ctx.editMessageText(
         "*🌐 Master’s Socials*\n\nChoose a platform to connect:",
         {
