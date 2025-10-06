@@ -171,12 +171,14 @@ bot.action(["info","description","master","uptime","socials","back_to_menu"], as
       break;
 
     case "socials":
+      // Only show social media links after clicking this button
       await ctx.editMessageText(
         "*🌐 Master’s Socials*\n\nChoose a platform to connect:",
         {
           parse_mode:"Markdown",
           reply_markup: Markup.inlineKeyboard([
-            [Markup.button.url("WhatsApp", "https://wa.me/918777845713"), Markup.button.url("Telegram", "https://t.me/X_o_x_o_002")],
+            [Markup.button.url("WhatsApp", "https://wa.me/918777845713")],
+            [Markup.button.url("Telegram", "https://t.me/X_o_x_o_002")],
             [Markup.button.url("Website", "https://hawkay002.github.io/Connect/")],
             [Markup.button.callback("⬅️ Back", "back_to_menu")]
           ])
