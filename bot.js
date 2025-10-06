@@ -5,7 +5,7 @@ import fs from "fs";
 // === Bot Configuration ===
 const TOKEN = process.env.BOT_TOKEN;
 if (!TOKEN) {
-  console.error("❌ BOT_TOKEN not found! Please set it in Render environment variables.");
+  console.error("❌ BOT_TOKEN not found! Set it in Render environment variables.");
   process.exit(1);
 }
 
@@ -22,21 +22,14 @@ const userStates = {}; // user_id -> "awaiting_contact" | "awaiting_name" | null
 // === Keep-Alive Server ===
 const app = express();
 app.get("/", (req, res) => res.send("✅ Bot server is alive and running!"));
-
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`🌐 Keep-alive server running on port ${PORT}`));
 
 // === Helper: Main Menu Buttons ===
 function getMainMenu() {
   return Markup.inlineKeyboard([
-    [
-      Markup.button.callback("📜 Bot Info", "info"),
-      Markup.button.callback("💬 Description", "description"),
-    ],
-    [
-      Markup.button.callback("👤 Master", "master"),
-      Markup.button.callback("⏱ Uptime", "uptime"),
-    ],
+    [Markup.button.callback("📜 Bot Info", "info"), Markup.button.callback("💬 Description", "description")],
+    [Markup.button.callback("👤 Master", "master"), Markup.button.callback("⏱ Uptime", "uptime")],
     [Markup.button.callback("🌐 Master’s Socials", "socials")],
   ]);
 }
@@ -49,7 +42,6 @@ bot.on("text", async (ctx) => {
   const userId = ctx.from.id;
   const text = ctx.message.text.trim().toLowerCase();
 
-  // Step 1: Awaiting name
   if (userStates[userId] === "awaiting_name") {
     if (text === "y") {
       await ctx.reply("✅ Identity confirmed! Preparing your card... 💫");
@@ -77,13 +69,11 @@ bot.on("text", async (ctx) => {
     return;
   }
 
-  // Step 2: Awaiting contact
   if (userStates[userId] === "awaiting_contact") {
     await ctx.reply('Please use the "Share Contact" button to send your number.');
     return;
   }
 
-  // Step 3: Trigger message
   if (text === TRIGGER_MESSAGE.toLowerCase()) {
     await ctx.reply("🔍 Checking database to find matches...");
     await new Promise((r) => setTimeout(r, 1500));
@@ -96,7 +86,6 @@ bot.on("text", async (ctx) => {
     return;
   }
 
-  // Step 4: Other messages
   await ctx.reply("I only respond to the specific trigger message.");
   await ctx.reply("You can check out more details below 👇", getMainMenu());
 });
