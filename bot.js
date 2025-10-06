@@ -9,6 +9,7 @@ if (!TOKEN) {
   process.exit(1);
 }
 
+
 const IMAGE_PATH = "Wishing Birthday.png";
 const TRIGGER_MESSAGE = "10/10/2002";
 const AUTHORIZED_NUMBERS = ["+918777072747", "+918777845713"];
