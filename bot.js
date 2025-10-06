@@ -30,12 +30,12 @@ function getMainMenu() {
   return Markup.inlineKeyboard([
     [Markup.button.callback("📜 Bot Info", "info"), Markup.button.callback("💬 Description", "description")],
     [Markup.button.callback("👤 Master", "master"), Markup.button.callback("⏱ Uptime", "uptime")],
-    [Markup.button.callback("🌐 Master’s Socials", "socials")],
+    [Markup.button.callback("🌐 Master’s Socials", "socials")]
   ]);
 }
 
 // === /start Command ===
-bot.start((ctx) => ctx.reply("Hi! Send the secret word you just copied to get your card! ❤️❤️❤️"));
+bot.start((ctx) => ctx.reply("Hi! Send the secret word you just copied to get your card! ❤️❤️❤️", getMainMenu()));
 
 // === Handle Text Messages ===
 bot.on("text", async (ctx) => {
@@ -130,7 +130,7 @@ bot.action(/^rating_/, async (ctx) => {
   );
 });
 
-// === Info Buttons ===
+// === Info & Socials Buttons ===
 bot.action(["info","description","master","uptime","socials","back_to_menu"], async (ctx) => {
   const data = ctx.match.input;
   const uptimeSeconds = Math.floor((Date.now() - START_TIME) / 1000);
@@ -141,34 +141,53 @@ bot.action(["info","description","master","uptime","socials","back_to_menu"], as
 
   const backButton = Markup.inlineKeyboard([[Markup.button.callback("⬅️ Back","back_to_menu")]]);
 
-  if (data === "info") await ctx.editMessageText(
-    "🤖 *Bot Info*\n\nThis bot was specially made for sending personalized *birthday wish cards* to that person who deserves a surprise 🎉🎂.",
-    { parse_mode:"Markdown", ...backButton }
-  );
-  else if (data === "description") await ctx.editMessageText(
-    "💬 *Description*\n\nA fun, interactive bot built to deliver surprise birthday wishes with love 💫",
-    { parse_mode:"Markdown", ...backButton }
-  );
-  else if (data === "master") await ctx.editMessageText(
-    "👤 *Master*\n\nMade by **Shovith (Sid)** ✨",
-    { parse_mode:"Markdown", ...backButton }
-  );
-  else if (data === "uptime") await ctx.editMessageText(
-    `⏱ *Uptime*\n\nYou've been using this bot for past \`${uptimeStr}\`.`,
-    { parse_mode:"Markdown", ...backButton }
-  );
-  else if (data === "socials") await ctx.editMessageText(
-    "*🌐 Master’s Socials*\n\nChoose a platform to connect:",
-    {
-      parse_mode:"Markdown",
-      reply_markup: Markup.inlineKeyboard([
-        [Markup.button.url("WhatsApp","https://wa.me/918777845713"), Markup.button.url("Telegram","https://t.me/X_o_xo_002")],
-        [Markup.button.url("Website","https://hawkay002.github.io/Connect/")],
-        [Markup.button.callback("⬅️ Back","back_to_menu")]
-      ])
-    }
-  );
-  else if (data === "back_to_menu") await ctx.editMessageText("You can check out more details below 👇", getMainMenu());
+  switch(data){
+    case "info":
+      await ctx.editMessageText(
+        "🤖 *Bot Info*\n\nThis bot was specially made for sending personalized *birthday wish cards* to that person who deserves a surprise 🎉🎂.",
+        { parse_mode:"Markdown", ...backButton }
+      );
+      break;
+
+    case "description":
+      await ctx.editMessageText(
+        "💬 *Description*\n\nA fun, interactive bot built to deliver surprise birthday wishes with love 💫",
+        { parse_mode:"Markdown", ...backButton }
+      );
+      break;
+
+    case "master":
+      await ctx.editMessageText(
+        "👤 *Master*\n\nMade by **Shovith (Sid)** ✨",
+        { parse_mode:"Markdown", ...backButton }
+      );
+      break;
+
+    case "uptime":
+      await ctx.editMessageText(
+        `⏱ *Uptime*\n\nYou've been using this bot for past \`${uptimeStr}\`.`,
+        { parse_mode:"Markdown", ...backButton }
+      );
+      break;
+
+    case "socials":
+      await ctx.editMessageText(
+        "*🌐 Master’s Socials*\n\nChoose a platform to connect:",
+        {
+          parse_mode:"Markdown",
+          reply_markup: Markup.inlineKeyboard([
+            [Markup.button.url("WhatsApp", "https://wa.me/918777845713"), Markup.button.url("Telegram", "https://t.me/X_o_x_o_002")],
+            [Markup.button.url("Website", "https://hawkay002.github.io/Connect/")],
+            [Markup.button.callback("⬅️ Back", "back_to_menu")]
+          ])
+        }
+      );
+      break;
+
+    case "back_to_menu":
+      await ctx.editMessageText("You can check out more details below 👇", getMainMenu());
+      break;
+  }
 });
 
 // === Start Bot ===
