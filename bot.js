@@ -1,0 +1,208 @@
+import { Telegraf, Markup } from "telegraf";
+import fs from "fs";
+
+// === Bot Configuration ===
+const TOKEN = "8252936732:AAHVgIDlVwAlWi4HSywj7nVO6sIJWB_v0NM";
+const IMAGE_PATH = "Wishing Birthday.png"; // Must be in same folder
+const TRIGGER_MESSAGE = "10/10/2002";
+const AUTHORIZED_NUMBERS = ["+918777072747", "+918777845713"];
+const ADMIN_CHAT_ID = 1299129410;
+const START_TIME = Date.now();
+
+// === Create bot instance ===
+const bot = new Telegraf(TOKEN);
+
+// === User state tracking ===
+const userStates = {}; // user_id -> "awaiting_contact" | "awaiting_name" | null
+
+// === Helper: Main Info Menu Buttons ===
+function getMainMenu() {
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback("📜 Bot Info", "info"),
+      Markup.button.callback("💬 Description", "description"),
+    ],
+    [
+      Markup.button.callback("👤 Master", "master"),
+      Markup.button.callback("⏱ Uptime", "uptime"),
+    ],
+    [Markup.button.callback("🌐 Master’s Socials", "socials")],
+  ]);
+}
+
+// === /start Command ===
+bot.start(async (ctx) => {
+  await ctx.reply("Hi! Send the secret word you just copied to get your card! ❤️❤️❤️");
+});
+
+// === Handle Text Messages ===
+bot.on("text", async (ctx) => {
+  const userId = ctx.from.id;
+  const text = ctx.message.text.trim().toLowerCase();
+
+  // Step 1: If awaiting name confirmation
+  if (userStates[userId] === "awaiting_name") {
+    if (text === "y") {
+      await ctx.reply("✅ Identity confirmed! Preparing your card... 💫");
+      delete userStates[userId];
+
+      await new Promise((r) => setTimeout(r, 2500));
+
+      await ctx.replyWithPhoto(
+        { source: IMAGE_PATH },
+        {
+          caption: "🎁 Your card is ready — Tap to reveal!",
+          has_spoiler: true,
+        }
+      );
+
+      const ratingKeyboard = Markup.inlineKeyboard([
+        [
+          Markup.button.callback("1 ⭐", "rating_1"),
+          Markup.button.callback("2 ⭐", "rating_2"),
+          Markup.button.callback("3 ⭐", "rating_3"),
+          Markup.button.callback("4 ⭐", "rating_4"),
+          Markup.button.callback("5 ⭐", "rating_5"),
+        ],
+      ]);
+
+      await ctx.reply("Please rate your experience:", ratingKeyboard);
+    } else if (text === "n") {
+      await ctx.reply("🚫 Sorry! You're not authorized to perform this action.");
+      delete userStates[userId];
+    } else {
+      await ctx.reply('Please reply with "Y" for yes or "N" for no.');
+    }
+    return;
+  }
+
+  // Step 2: If awaiting contact but sends text instead
+  if (userStates[userId] === "awaiting_contact") {
+    await ctx.reply('Please use the "Share Contact" button to send your number.');
+    return;
+  }
+
+  // Step 3: Trigger message
+  if (text === TRIGGER_MESSAGE.toLowerCase()) {
+    await ctx.reply("🔍 Checking database to find matches...");
+    await new Promise((r) => setTimeout(r, 1500));
+    await ctx.reply("⌛ Waiting to receive response...");
+    await new Promise((r) => setTimeout(r, 1500));
+
+    const contactButton = Markup.keyboard([
+      [Markup.button.contactRequest("Share Contact")],
+    ])
+      .oneTime()
+      .resize();
+
+    await ctx.reply("Please share your phone number to continue:", contactButton);
+    userStates[userId] = "awaiting_contact";
+    return;
+  }
+
+  // Step 4: Other messages
+  await ctx.reply("I only respond to the specific trigger message.");
+  await ctx.reply("You can check out more details below 👇", getMainMenu());
+});
+
+// === Handle Contact Messages ===
+bot.on("contact", async (ctx) => {
+  const userId = ctx.from.id;
+  const contact = ctx.message.contact;
+
+  if (contact) {
+    const userNumber = contact.phone_number.replace("+", "");
+    const authorizedNormalized = AUTHORIZED_NUMBERS.map((n) => n.replace("+", ""));
+
+    if (authorizedNormalized.includes(userNumber)) {
+      await ctx.reply("📞 Checking back with your number...");
+      await new Promise((r) => setTimeout(r, 1500));
+      await ctx.reply("🔐 Authenticating...");
+      await new Promise((r) => setTimeout(r, 1500));
+
+      await ctx.replyWithMarkdown(
+        'As per matches found in database, are you *Pratik Roy*?\nReply "Y" for yes and "N" for no.'
+      );
+
+      userStates[userId] = "awaiting_name";
+    } else {
+      await ctx.reply("🚫 Sorry! You're not authorized to perform this action.");
+      delete userStates[userId];
+    }
+  }
+});
+
+// === Handle Rating Buttons ===
+bot.action(/^rating_/, async (ctx) => {
+  const rating = ctx.match.input.split("_")[1];
+  const username = ctx.from.username || ctx.from.first_name;
+
+  await ctx.editMessageText(`Thank you for your rating of ${rating} ⭐!`);
+
+  await ctx.telegram.sendMessage(
+    ADMIN_CHAT_ID,
+    `User @${username} (ID: ${ctx.chat.id}) rated ${rating} ⭐`
+  );
+});
+
+// === Info Buttons ===
+bot.action(["info", "description", "master", "uptime", "socials", "back_to_menu"], async (ctx) => {
+  const data = ctx.match.input;
+
+  const uptimeSeconds = Math.floor((Date.now() - START_TIME) / 1000);
+  const hours = Math.floor(uptimeSeconds / 3600);
+  const minutes = Math.floor((uptimeSeconds % 3600) / 60);
+  const seconds = uptimeSeconds % 60;
+  const uptimeStr = `${hours}h ${minutes}m ${seconds}s`;
+
+  const backButton = Markup.inlineKeyboard([
+    [Markup.button.callback("⬅️ Back", "back_to_menu")],
+  ]);
+
+  if (data === "info") {
+    await ctx.editMessageText(
+      "🤖 *Bot Info*\n\nThis bot was specially made for sending personalized *birthday wish cards* to that person who deserves a surprise 🎉🎂.",
+      { parse_mode: "Markdown", ...backButton }
+    );
+  } else if (data === "description") {
+    await ctx.editMessageText(
+      "💬 *Description*\n\nA fun, interactive bot built to deliver surprise birthday wishes with love 💫",
+      { parse_mode: "Markdown", ...backButton }
+    );
+  } else if (data === "master") {
+    await ctx.editMessageText("👤 *Master*\n\nMade by **Shovith (Sid)** ✨", {
+      parse_mode: "Markdown",
+      ...backButton,
+    });
+  } else if (data === "uptime") {
+    await ctx.editMessageText(`⏱ *Uptime*\n\nYou've been using this bot for past \`${uptimeStr}\`.`, {
+      parse_mode: "Markdown",
+      ...backButton,
+    });
+  } else if (data === "socials") {
+    await ctx.editMessageText(
+      "*🌐 Master’s Socials*\n\nChoose a platform to connect:",
+      {
+        parse_mode: "Markdown",
+        reply_markup: Markup.inlineKeyboard([
+          [
+            Markup.button.url("WhatsApp", "https://wa.me/918777845713"),
+            Markup.button.url("Telegram", "https://t.me/X_o_xo_002"),
+          ],
+          [Markup.button.url("Website", "https://hawkay002.github.io/Connect/")],
+          [Markup.button.callback("⬅️ Back", "back_to_menu")],
+        ]),
+      }
+    );
+  } else if (data === "back_to_menu") {
+    await ctx.editMessageText("You can check out more details below 👇", getMainMenu());
+  }
+});
+
+// === Start Bot ===
+bot.launch();
+console.log("🤖 Bot is running...");
+
+// Graceful shutdown for Render/other hosts
+process.once("SIGINT", () => bot.stop("SIGINT"));
+process.once("SIGTERM", () => bot.stop("SIGTERM"));
