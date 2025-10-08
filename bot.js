@@ -3,9 +3,10 @@ import express from "express";
 import fs from "fs";
 
 // === Bot Configuration ===
+// IMPORTANT: Set BOT_TOKEN in your hosting environment's variables.
 const TOKEN = process.env.BOT_TOKEN;
 if (!TOKEN) {
-  console.error("❌ BOT_TOKEN not found! Set it in Render environment variables.");
+  console.error("❌ BOT_TOKEN not found! Set it in your environment variables.");
   process.exit(1);
 }
 
@@ -13,14 +14,14 @@ if (!TOKEN) {
 const IMAGE_PATH = "Wishing Birthday.png";
 const TRIGGER_MESSAGE = "10/10/2002";
 const AUTHORIZED_NUMBERS = ["+918777072747", "+918777845713"];
-const ADMIN_CHAT_ID = 1299129410;
+const ADMIN_CHAT_ID = 1299129410; // Your Telegram User ID
 const START_TIME = Date.now();
 
 // === Create bot instance ===
 const bot = new Telegraf(TOKEN);
 const userStates = {}; // user_id -> "awaiting_contact" | "awaiting_name" | null
 
-// === Keep-Alive Server ===
+// === Keep-Alive Server (for hosting platforms like Render) ===
 const app = express();
 app.get("/", (req, res) => res.send("✅ Bot server is alive and running!"));
 const PORT = process.env.PORT || 10000;
@@ -51,7 +52,14 @@ bot.on("text", async (ctx) => {
       await ctx.reply("✅ Identity confirmed! Preparing your card... 💫");
       delete userStates[userId];
       await new Promise((r) => setTimeout(r, 2500));
-      await ctx.replyWithPhoto({ source: IMAGE_PATH }, { caption: "🎁 Your card is ready — Tap to reveal!", has_spoiler: true });
+      // Ensure the image file exists before sending
+      if (fs.existsSync(IMAGE_PATH)) {
+        await ctx.replyWithPhoto({ source: IMAGE_PATH }, { caption: "🎁 Your card is ready — Tap to reveal!", has_spoiler: true });
+      } else {
+        await ctx.reply("😔 Sorry, the birthday card image is missing on the server.");
+        console.error(`Error: Image not found at ${IMAGE_PATH}`);
+      }
+
 
       const ratingKeyboard = Markup.inlineKeyboard([
         [
@@ -178,12 +186,12 @@ bot.action(["info","description","master","uptime","socials","back_to_menu"], as
       break;
 
     case "socials":
-      // Show social media links only after clicking this button
+      // FIX: Spread the Markup object into the options object
       await ctx.editMessageText(
         "*🌐 Master’s Socials*\n\nChoose a platform to connect:",
         {
           parse_mode:"Markdown",
-          reply_markup: Markup.inlineKeyboard([
+          ...Markup.inlineKeyboard([
             [Markup.button.url("WhatsApp", "https://wa.me/918777845713")],
             [Markup.button.url("Telegram", "https://t.me/X_o_x_o_002")],
             [Markup.button.url("Website", "https://hawkay002.github.io/Connect/")],
@@ -206,3 +214,4 @@ console.log("🤖 Bot is running...");
 // Graceful shutdown
 process.once("SIGINT", () => bot.stop("SIGINT"));
 process.once("SIGTERM", () => bot.stop("SIGTERM"));
+
