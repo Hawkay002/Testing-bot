@@ -51,7 +51,22 @@ bot.on("text", async (ctx) => {
     if (text === "y") {
       await ctx.reply("✅ Identity confirmed! Preparing your card... 💫");
       delete userStates[userId];
-      await new Promise((r) => setTimeout(r, 2500));
+      
+      // --- START: New Sticker Sequence ---
+      // 1. Send the first sticker
+      await ctx.replyWithSticker('CAACAgEAAxkBAAEPieBo5pIfbsOvjPZ6aGZJzuszgj_RMwACMAQAAhyYKEevQOWk5-70BjYE');
+
+      // 2. Wait for 3 seconds
+      await new Promise((r) => setTimeout(r, 3000));
+
+      // 3. Send the second sticker
+      await ctx.replyWithSticker('CAACAgEAAxkBAAEPf8Zo4QXOaaTjfwVq2EdaYp2t0By4UAAC-gEAAoyxIER4c3iI53gcxDYE');
+      
+      // Adding a small delay before the final card for a smoother experience
+      await new Promise((r) => setTimeout(r, 1500));
+      // --- END: New Sticker Sequence ---
+
+      // 4. Finally, send the image and rating prompt
       // Ensure the image file exists before sending
       if (fs.existsSync(IMAGE_PATH)) {
         await ctx.replyWithPhoto({ source: IMAGE_PATH }, { caption: "🎁 Your card is ready — Tap to reveal!", has_spoiler: true });
@@ -59,7 +74,6 @@ bot.on("text", async (ctx) => {
         await ctx.reply("😔 Sorry, the birthday card image is missing on the server.");
         console.error(`Error: Image not found at ${IMAGE_PATH}`);
       }
-
 
       const ratingKeyboard = Markup.inlineKeyboard([
         [
@@ -214,4 +228,3 @@ console.log("🤖 Bot is running...");
 // Graceful shutdown
 process.once("SIGINT", () => bot.stop("SIGINT"));
 process.once("SIGTERM", () => bot.stop("SIGTERM"));
-
