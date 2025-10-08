@@ -21,6 +21,14 @@ const START_TIME = Date.now();
 const bot = new Telegraf(TOKEN);
 const userStates = {}; // user_id -> "awaiting_contact" | "awaiting_name" | null
 
+// === Helper to send typing indicator ===
+async function sendTypingAction(ctx) {
+    await ctx.replyWithChatAction('typing');
+    // A short delay to make the typing indicator feel more natural
+    await new Promise(r => setTimeout(r, 800));
+}
+
+
 // === Keep-Alive Server (for hosting platforms like Render) ===
 const app = express();
 app.get("/", (req, res) => res.send("✅ Bot server is alive and running!"));
@@ -37,8 +45,9 @@ function getMainMenu() {
 }
 
 // === /start Command ===
-bot.start((ctx) => {
-  ctx.reply("Hi! Send the secret word you just copied to get your card! ❤️❤️❤️");
+bot.start(async (ctx) => {
+  await sendTypingAction(ctx);
+  await ctx.reply("Hi! Send the secret word you just copied to get your card! ❤️❤️❤️");
 });
 
 // === Handle Text Messages ===
@@ -49,25 +58,23 @@ bot.on("text", async (ctx) => {
   // Awaiting name confirmation
   if (userStates[userId] === "awaiting_name") {
     if (text === "y") {
+      await sendTypingAction(ctx);
       await ctx.reply("✅ Identity confirmed! Preparing your card... 💫");
       delete userStates[userId];
       
-      // --- START: New Sticker Sequence ---
-      // 1. Send the first sticker
+      // --- START: Sticker Sequence ---
+      await sendTypingAction(ctx);
       await ctx.replyWithSticker('CAACAgEAAxkBAAEPieBo5pIfbsOvjPZ6aGZJzuszgj_RMwACMAQAAhyYKEevQOWk5-70BjYE');
 
-      // 2. Wait for 3 seconds
       await new Promise((r) => setTimeout(r, 3000));
 
-      // 3. Send the second sticker
+      await sendTypingAction(ctx);
       await ctx.replyWithSticker('CAACAgEAAxkBAAEPf8Zo4QXOaaTjfwVq2EdaYp2t0By4UAAC-gEAAoyxIER4c3iI53gcxDYE');
       
-      // Adding a small delay before the final card for a smoother experience
       await new Promise((r) => setTimeout(r, 1500));
-      // --- END: New Sticker Sequence ---
+      // --- END: Sticker Sequence ---
 
-      // 4. Finally, send the image and rating prompt
-      // Ensure the image file exists before sending
+      await sendTypingAction(ctx);
       if (fs.existsSync(IMAGE_PATH)) {
         await ctx.replyWithPhoto({ source: IMAGE_PATH }, { caption: "🎁 Your card is ready — Tap to reveal!", has_spoiler: true });
       } else {
@@ -84,12 +91,15 @@ bot.on("text", async (ctx) => {
           Markup.button.callback("5 ⭐", "rating_5"),
         ],
       ]);
-
+      
+      await sendTypingAction(ctx);
       await ctx.reply("Please rate your experience:", ratingKeyboard);
     } else if (text === "n") {
+      await sendTypingAction(ctx);
       await ctx.reply("🚫 Sorry! You're not authorized to perform this action.");
       delete userStates[userId];
     } else {
+      await sendTypingAction(ctx);
       await ctx.reply('Please reply with "Y" for yes or "N" for no.');
     }
     return;
@@ -97,25 +107,33 @@ bot.on("text", async (ctx) => {
 
   // Awaiting contact
   if (userStates[userId] === "awaiting_contact") {
+    await sendTypingAction(ctx);
     await ctx.reply('Please use the "Share Contact" button to send your number.');
     return;
   }
 
   // Trigger message flow
   if (text === TRIGGER_MESSAGE.toLowerCase()) {
+    await sendTypingAction(ctx);
     await ctx.reply("🔍 Checking database to find matches...");
     await new Promise((r) => setTimeout(r, 1500));
+
+    await sendTypingAction(ctx);
     await ctx.reply("⌛ Waiting to receive response...");
     await new Promise((r) => setTimeout(r, 1500));
 
     const contactButton = Markup.keyboard([[Markup.button.contactRequest("Share Contact")]]).oneTime().resize();
+    await sendTypingAction(ctx);
     await ctx.reply("Please share your phone number to continue:", contactButton);
     userStates[userId] = "awaiting_contact";
     return;
   }
 
   // Non-trigger message: show warning + main menu buttons
+  await sendTypingAction(ctx);
   await ctx.reply("I only respond to the specific trigger message.");
+  
+  await sendTypingAction(ctx);
   await ctx.reply("You can check out more details below 👇", getMainMenu());
 });
 
@@ -129,17 +147,22 @@ bot.on("contact", async (ctx) => {
     const authorizedNormalized = AUTHORIZED_NUMBERS.map((n) => n.replace("+", ""));
 
     if (authorizedNormalized.includes(userNumber)) {
+      await sendTypingAction(ctx);
       await ctx.reply("📞 Checking back with your number...");
       await new Promise((r) => setTimeout(r, 1500));
+      
+      await sendTypingAction(ctx);
       await ctx.reply("🔐 Authenticating...");
       await new Promise((r) => setTimeout(r, 1500));
-
+      
+      await sendTypingAction(ctx);
       await ctx.replyWithMarkdown(
         'As per matches found in database, are you *Pratik Roy*?\nReply "Y" for yes and "N" for no.'
       );
 
       userStates[userId] = "awaiting_name";
     } else {
+      await sendTypingAction(ctx);
       await ctx.reply("🚫 Sorry! You're not authorized to perform this action.");
       delete userStates[userId];
     }
@@ -153,6 +176,7 @@ bot.action(/^rating_/, async (ctx) => {
 
   await ctx.editMessageText(`Thank you for your rating of ${rating} ⭐!`);
 
+  // No typing indicator needed for sending a message to the admin
   await ctx.telegram.sendMessage(
     ADMIN_CHAT_ID,
     `User @${username} (ID: ${ctx.chat.id}) rated ${rating} ⭐`
@@ -160,6 +184,7 @@ bot.action(/^rating_/, async (ctx) => {
 });
 
 // === Info & Socials Buttons ===
+// Typing indicators are not needed for editMessageText as it modifies an existing message
 bot.action(["info","description","master","uptime","socials","back_to_menu"], async (ctx) => {
   const data = ctx.match.input;
   const uptimeSeconds = Math.floor((Date.now() - START_TIME) / 1000);
@@ -200,7 +225,6 @@ bot.action(["info","description","master","uptime","socials","back_to_menu"], as
       break;
 
     case "socials":
-      // FIX: Spread the Markup object into the options object
       await ctx.editMessageText(
         "*🌐 Master’s Socials*\n\nChoose a platform to connect:",
         {
