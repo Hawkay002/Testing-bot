@@ -19,7 +19,7 @@ const START_TIME = Date.now();
 
 // === Create bot instance ===
 const bot = new Telegraf(TOKEN);
-const userStates = {}; // user_id -> "awaiting_contact" | "awaiting_name" | null
+const userStates = {}; // user_id -> "awaiting_contact" | null
 
 // === Helper to send typing indicator ===
 async function sendTypingAction(ctx) {
@@ -54,56 +54,6 @@ bot.start(async (ctx) => {
 bot.on("text", async (ctx) => {
   const userId = ctx.from.id;
   const text = ctx.message.text.trim().toLowerCase();
-
-  // Awaiting name confirmation
-  if (userStates[userId] === "awaiting_name") {
-    if (text === "y") {
-      await sendTypingAction(ctx);
-      await ctx.reply("✅ Identity confirmed! Preparing your card... 💫");
-      delete userStates[userId];
-      
-      // --- START: Sticker Sequence ---
-      await sendTypingAction(ctx);
-      await ctx.replyWithSticker('CAACAgEAAxkBAAEPieBo5pIfbsOvjPZ6aGZJzuszgj_RMwACMAQAAhyYKEevQOWk5-70BjYE');
-
-      await new Promise((r) => setTimeout(r, 3000));
-
-      await sendTypingAction(ctx);
-      await ctx.replyWithSticker('CAACAgEAAxkBAAEPf8Zo4QXOaaTjfwVq2EdaYp2t0By4UAAC-gEAAoyxIER4c3iI53gcxDYE');
-      
-      await new Promise((r) => setTimeout(r, 1500));
-      // --- END: Sticker Sequence ---
-
-      await sendTypingAction(ctx);
-      if (fs.existsSync(IMAGE_PATH)) {
-        await ctx.replyWithPhoto({ source: IMAGE_PATH }, { caption: "🎁 Your card is ready — Tap to reveal!", has_spoiler: true });
-      } else {
-        await ctx.reply("😔 Sorry, the birthday card image is missing on the server.");
-        console.error(`Error: Image not found at ${IMAGE_PATH}`);
-      }
-
-      const ratingKeyboard = Markup.inlineKeyboard([
-        [
-          Markup.button.callback("1 ⭐", "rating_1"),
-          Markup.button.callback("2 ⭐", "rating_2"),
-          Markup.button.callback("3 ⭐", "rating_3"),
-          Markup.button.callback("4 ⭐", "rating_4"),
-          Markup.button.callback("5 ⭐", "rating_5"),
-        ],
-      ]);
-      
-      await sendTypingAction(ctx);
-      await ctx.reply("Please rate your experience:", ratingKeyboard);
-    } else if (text === "n") {
-      await sendTypingAction(ctx);
-      await ctx.reply("🚫 Sorry! You're not authorized to perform this action.");
-      delete userStates[userId];
-    } else {
-      await sendTypingAction(ctx);
-      await ctx.reply('Please reply with "Y" for yes or "N" for no.');
-    }
-    return;
-  }
 
   // Awaiting contact
   if (userStates[userId] === "awaiting_contact") {
@@ -143,6 +93,8 @@ bot.on("contact", async (ctx) => {
   const contact = ctx.message.contact;
 
   if (contact) {
+    // Once contact is shared, they are no longer awaiting it.
+    delete userStates[userId];
     const userNumber = contact.phone_number.replace("+", "");
     const authorizedNormalized = AUTHORIZED_NUMBERS.map((n) => n.replace("+", ""));
 
@@ -155,19 +107,69 @@ bot.on("contact", async (ctx) => {
       await ctx.reply("🔐 Authenticating...");
       await new Promise((r) => setTimeout(r, 1500));
       
+      // --- NEW: Confirmation with Buttons ---
+      const confirmationKeyboard = Markup.inlineKeyboard([
+          Markup.button.callback("Yes, that's me!", "confirm_yes"),
+          Markup.button.callback("No, that's not me", "confirm_no")
+      ]);
+
       await sendTypingAction(ctx);
       await ctx.replyWithMarkdown(
-        'As per matches found in database, are you *Pratik Roy*?\nReply "Y" for yes and "N" for no.'
+        'As per matches found in database, are you *Pratik Roy*?',
+        confirmationKeyboard
       );
-
-      userStates[userId] = "awaiting_name";
     } else {
       await sendTypingAction(ctx);
       await ctx.reply("🚫 Sorry! You're not authorized to perform this action.");
-      delete userStates[userId];
     }
   }
 });
+
+
+// === Handle "Yes" Confirmation Button ===
+bot.action('confirm_yes', async (ctx) => {
+    // Edit the original message to show confirmation and remove buttons
+    await ctx.editMessageText("✅ Identity confirmed! Preparing your card... 💫");
+
+    // --- START: Sticker Sequence ---
+    await sendTypingAction(ctx);
+    await ctx.replyWithSticker('CAACAgEAAxkBAAEPieBo5pIfbsOvjPZ6aGZJzuszgj_RMwACMAQAAhyYKEevQOWk5-70BjYE');
+
+    await new Promise((r) => setTimeout(r, 3000));
+
+    await sendTypingAction(ctx);
+    await ctx.replyWithSticker('CAACAgEAAxkBAAEPf8Zo4QXOaaTjfwVq2EdaYp2t0By4UAAC-gEAAoyxIER4c3iI53gcxDYE');
+    
+    await new Promise((r) => setTimeout(r, 1500));
+    // --- END: Sticker Sequence ---
+
+    await sendTypingAction(ctx);
+    if (fs.existsSync(IMAGE_PATH)) {
+      await ctx.replyWithPhoto({ source: IMAGE_PATH }, { caption: "🎁 Your card is ready — Tap to reveal!", has_spoiler: true });
+    } else {
+      await ctx.reply("😔 Sorry, the birthday card image is missing on the server.");
+      console.error(`Error: Image not found at ${IMAGE_PATH}`);
+    }
+
+    const ratingKeyboard = Markup.inlineKeyboard([
+      [
+        Markup.button.callback("1 ⭐", "rating_1"),
+        Markup.button.callback("2 ⭐", "rating_2"),
+        Markup.button.callback("3 ⭐", "rating_3"),
+        Markup.button.callback("4 ⭐", "rating_4"),
+        Markup.button.callback("5 ⭐", "rating_5"),
+      ],
+    ]);
+    
+    await sendTypingAction(ctx);
+    await ctx.reply("Please rate your experience:", ratingKeyboard);
+});
+
+// === Handle "No" Confirmation Button ===
+bot.action('confirm_no', async (ctx) => {
+    await ctx.editMessageText("🚫 Sorry! You're not authorized to perform this action.");
+});
+
 
 // === Handle Ratings ===
 bot.action(/^rating_/, async (ctx) => {
