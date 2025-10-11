@@ -14,11 +14,11 @@ if (!TOKEN) {
 const IMAGE_PATH = "Wishing Birthday.png"; 
 
 const TRIGGER_MESSAGE = "10/10/2002";
-const AUTHORIZED_NUMBERS = ["+918777072747", "+918777845713", "+919903403883"];
+const AUTHORIZED_NUMBERS = ["+918777072747", "+918777845713"];
 const ADMIN_CHAT_ID = 1299129410; // Your Telegram User ID
 const START_TIME = Date.now();
 // IMPORTANT: Replace this with your actual UPI Virtual Payment Address (VPA)
-const BOT_ADMIN_VPA = "9903403883@upi"; 
+const BOT_ADMIN_VPA = "shovith-admin@upi"; 
 
 // === Create bot instance ===
 const bot = new Telegraf(TOKEN);
@@ -304,7 +304,7 @@ bot.action('ask_for_gift', async (ctx) => {
     pendingGifts[adminRef] = { userId, userUpi: upiId, amount };
 
     // 1. Tell the user we're waiting
-    await ctx.editMessageText("⏳ Waiting for payment confirmation from the system...");
+    await ctx.editMessageText("⏳ Waiting for confirmation..."); // Updated user message
     
     // 2. Alert the Admin with the request
     const adminNotificationText = `
@@ -315,12 +315,13 @@ bot.action('ask_for_gift', async (ctx) => {
 **UPI ID:** \`${upiId}\`
 **Ref ID:** \`${refId}\`
 
-Please click the button below to generate and send the payment link.
+Click below to initialize the payment and send the UPI link to your device.
     `;
 
-    // The Admin clicks this button to generate the deep link
+    // The Admin clicks this button to generate the deep link and notify the user
+    // RENAMED BUTTON: The admin clicks this to 'Initialize Payment Link'
     const adminKeyboard = Markup.inlineKeyboard([
-        Markup.button.callback(`✅ Send Payment Link (₹${amount})`, `admin_init_pay:${adminRef}`),
+        Markup.button.callback(`🚀 Initialize Payment Link (₹${amount})`, `admin_init_pay:${adminRef}`),
     ]);
 
     await ctx.telegram.sendMessage(
@@ -331,7 +332,7 @@ Please click the button below to generate and send the payment link.
 });
 
 
-// === Handle "Initialize Payment" (Admin Action) ===
+// === Handle "Initialize Payment Link" (Admin Action) ===
 bot.action(/^admin_init_pay:/, async (ctx) => {
     const adminRef = ctx.match.input.split(':')[1];
     const giftData = pendingGifts[adminRef];
@@ -351,21 +352,22 @@ bot.action(/^admin_init_pay:/, async (ctx) => {
     // Construct the UPI Deep Link (Admin is the Payer, User is the Payee)
     const upiLink = `upi://pay?pa=${userUpi}&pn=${encodeURIComponent("Gift Recipient")}&am=${amount}&cu=INR&tn=${encodeURIComponent(`Birthday Gift: ${refId}`)}&mc=5499&tr=${refId}&url=https://bot.link`;
 
-    // 1. Edit the Admin message to show the actual payment link
+    // 1. Notify the original user with the requested text
+    await bot.telegram.sendMessage(
+        userId,
+        "✨ Payment initialization started, waiting for few minutes you'll soon receive your gift. 😊"
+    );
+    
+    // 2. Edit the Admin message to show the actual payment link (this is what opens the UPI app)
     await ctx.editMessageText(
-        `🔗 *Payment Initiated for ₹${amount}* to \`${userUpi}\`. \n\nClick the button to open your UPI app and complete the transfer.`,
+        `🔗 *Payment Initiated for ₹${amount}* to \`${userUpi}\`. \n\n**Click the button below to open your UPI app and complete the transfer.**`,
         {
             parse_mode: 'Markdown',
             ...Markup.inlineKeyboard([
-                Markup.button.url("🚀 Open UPI App & Pay", upiLink)
+                // This URL button is the final step that opens the UPI app on your phone
+                Markup.button.url("🔥 Finalize Payment in UPI App", upiLink) 
             ])
         }
-    );
-
-    // 2. Notify the original user
-    await bot.telegram.sendMessage(
-        userId,
-        "✨ Payment initialization started! The process is underway. Please wait a few minutes, you'll soon receive your gift from the system. Thank you for your patience! 😊"
     );
     
     // Clean up the in-memory state after initiation (optional, can be kept until payment success)
