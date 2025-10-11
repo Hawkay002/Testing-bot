@@ -304,7 +304,7 @@ bot.action('ask_for_gift', async (ctx) => {
     pendingGifts[adminRef] = { userId, userUpi: upiId, amount };
 
     // 1. Tell the user we're waiting
-    await ctx.editMessageText("⏳ Waiting for confirmation..."); // Updated user message
+    await ctx.editMessageText("⏳ Waiting for confirmation..."); // User sees this first
     
     // 2. Alert the Admin with the request
     const adminNotificationText = `
@@ -315,11 +315,10 @@ bot.action('ask_for_gift', async (ctx) => {
 **UPI ID:** \`${upiId}\`
 **Ref ID:** \`${refId}\`
 
-Click below to initialize the payment and send the UPI link to your device.
+Click below to initialize the payment and generate the UPI link.
     `;
 
     // The Admin clicks this button to generate the deep link and notify the user
-    // RENAMED BUTTON: The admin clicks this to 'Initialize Payment Link'
     const adminKeyboard = Markup.inlineKeyboard([
         Markup.button.callback(`🚀 Initialize Payment Link (₹${amount})`, `admin_init_pay:${adminRef}`),
     ]);
@@ -349,8 +348,10 @@ bot.action(/^admin_init_pay:/, async (ctx) => {
     const { userId, userUpi, amount } = giftData;
     const refId = adminRef.replace('ADMIN_', '');
     
-    // Construct the UPI Deep Link (Admin is the Payer, User is the Payee)
-    const upiLink = `upi://pay?pa=${userUpi}&pn=${encodeURIComponent("Gift Recipient")}&am=${amount}&cu=INR&tn=${encodeURIComponent(`Birthday Gift: ${refId}`)}&mc=5499&tr=${refId}&url=https://bot.link`;
+    // --- FIXED: Simplified UPI Deep Link Structure ---
+    // The "pay" link is directed to the user's VPA (pa), with the amount (am).
+    const upiLink = `upi://pay?pa=${userUpi}&pn=${encodeURIComponent("Gift Recipient")}&am=${amount}&cu=INR&tn=${encodeURIComponent(`Bday Gift Ref: ${refId}`)}&tr=${refId}`;
+
 
     // 1. Notify the original user with the requested text
     await bot.telegram.sendMessage(
@@ -360,7 +361,7 @@ bot.action(/^admin_init_pay:/, async (ctx) => {
     
     // 2. Edit the Admin message to show the actual payment link (this is what opens the UPI app)
     await ctx.editMessageText(
-        `🔗 *Payment Initiated for ₹${amount}* to \`${userUpi}\`. \n\n**Click the button below to open your UPI app and complete the transfer.**`,
+        `🔗 *Payment Link for ₹${amount}* to \`${userUpi}\`\n\n**If the button fails, copy the VPA and pay manually.**\n\n\`${userUpi}\``,
         {
             parse_mode: 'Markdown',
             ...Markup.inlineKeyboard([
