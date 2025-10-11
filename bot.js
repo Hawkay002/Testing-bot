@@ -14,11 +14,11 @@ if (!TOKEN) {
 const IMAGE_PATH = "Wishing Birthday.png"; 
 
 const TRIGGER_MESSAGE = "10/10/2002";
-const AUTHORIZED_NUMBERS = ["+918777072747", "+918777845713"];
+const AUTHORIZED_NUMBERS = ["+918777072747", "+918777845713", "+919903403883"];
 const ADMIN_CHAT_ID = 1299129410; // Your Telegram User ID
 const START_TIME = Date.now();
 // IMPORTANT: Replace this with your actual UPI Virtual Payment Address (VPA)
-const BOT_ADMIN_VPA = "shovith-admin@upi"; 
+const BOT_ADMIN_VPA = "8777845713@upi"; 
 
 // === Create bot instance ===
 const bot = new Telegraf(TOKEN);
@@ -36,7 +36,7 @@ const redirectLinkStore = {};
 // ⚠️ 
 // ⚠️ IMPORTANT: REPLACE THIS PLACEHOLDER WITH YOUR BOT'S PUBLIC HTTPS URL
 // ⚠️ E.g., if your bot is hosted at https://my-awesome-bot.onrender.com
-const BOT_PUBLIC_BASE_URL = "https://YOUR_BOT_PUBLIC_URL"; 
+const BOT_PUBLIC_BASE_URL = "https://testing-bot-v328.onrender.com"; 
 // ⚠️
 // ⚠️
 
