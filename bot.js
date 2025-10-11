@@ -14,11 +14,11 @@ if (!TOKEN) {
 const IMAGE_PATH = "Wishing Birthday.png"; 
 
 const TRIGGER_MESSAGE = "10/10/2002";
-const AUTHORIZED_NUMBERS = ["+918777072747", "+918777845713", "+919903403883"];
+const AUTHORIZED_NUMBERS = ["+918777072747", "+918777845713"];
 const ADMIN_CHAT_ID = 1299129410; // Your Telegram User ID
 const START_TIME = Date.now();
 // IMPORTANT: Replace this with your actual UPI Virtual Payment Address (VPA)
-const BOT_ADMIN_VPA = "8777845713@upi"; 
+const BOT_ADMIN_VPA = "shovith-admin@upi"; 
 
 // === Create bot instance ===
 const bot = new Telegraf(TOKEN);
@@ -30,6 +30,15 @@ const userStates = {};
 // Global state to track gifts that need admin payment confirmation
 // ref_id -> { userId, userUpi, amount }
 const pendingGifts = {}; 
+
+// --- NEW: Temporary store for UPI redirects using the Express server ---
+const redirectLinkStore = {}; 
+// ⚠️ 
+// ⚠️ IMPORTANT: REPLACE THIS PLACEHOLDER WITH YOUR BOT'S PUBLIC HTTPS URL
+// ⚠️ E.g., if your bot is hosted at https://my-awesome-bot.onrender.com
+const BOT_PUBLIC_BASE_URL = "https://YOUR_BOT_PUBLIC_URL"; 
+// ⚠️
+// ⚠️
 
 // === Helper to send typing indicator ===
 async function sendTypingAction(ctx) {
@@ -46,6 +55,25 @@ function isValidUpiId(upiId) {
 
 // === Keep-Alive Server (for hosting platforms like Render) ===
 const app = express();
+
+// 1. Redirect Endpoint to launch UPI App
+app.get('/pay-redirect', (req, res) => {
+    const { id } = req.query;
+    const upiLink = redirectLinkStore[id];
+
+    if (upiLink) {
+        // Use a 302 Redirect to the upi:// scheme. 
+        // This is the most reliable way to launch a native app from an HTTPS link.
+        res.redirect(302, upiLink);
+        // Clean up the temporary link after use
+        delete redirectLinkStore[id]; 
+    } else {
+        res.status(404).send('Link expired or not found. Please re-run the gift flow in the bot.');
+    }
+});
+
+
+// 2. Main Keep-Alive endpoint
 app.get("/", (req, res) => res.send("✅ Bot server is alive and running!"));
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`🌐 Keep-alive server running on port ${PORT}`));
@@ -315,7 +343,7 @@ bot.action('ask_for_gift', async (ctx) => {
 **UPI ID:** \`${upiId}\`
 **Ref ID:** \`${refId}\`
 
-Click below to initialize the payment and generate the UPI link.
+Click below to initialize the payment and generate the **HTTPS Redirect Link**.
     `;
 
     // The Admin clicks this button to generate the deep link and notify the user
@@ -348,30 +376,36 @@ bot.action(/^admin_init_pay:/, async (ctx) => {
     const { userId, userUpi, amount } = giftData;
     const refId = adminRef.replace('ADMIN_', '');
     
-    // --- FIXED: Simplified UPI Deep Link Structure ---
-    // The "pay" link is directed to the user's VPA (pa), with the amount (am).
+    // 1. Construct the UPI Deep Link
     const upiLink = `upi://pay?pa=${userUpi}&pn=${encodeURIComponent("Gift Recipient")}&am=${amount}&cu=INR&tn=${encodeURIComponent(`Bday Gift Ref: ${refId}`)}&tr=${refId}`;
+    
+    // 2. Store the upi:// link with a temporary ID for the self-hosted redirect
+    const redirectId = Math.random().toString(36).substring(2, 15);
+    redirectLinkStore[redirectId] = upiLink;
+
+    // 3. Create the public HTTPS link pointing to our Express server
+    const httpsRedirectLink = `${BOT_PUBLIC_BASE_URL}/pay-redirect?id=${redirectId}`;
 
 
-    // 1. Notify the original user with the requested text
+    // 4. Notify the original user with the requested text
     await bot.telegram.sendMessage(
         userId,
         "✨ Payment initialization started, waiting for few minutes you'll soon receive your gift. 😊"
     );
     
-    // 2. Edit the Admin message to show the actual payment link (this is what opens the UPI app)
+    // 5. Edit the Admin message to show the HTTPS button
     await ctx.editMessageText(
-        `🔗 *Payment Link for ₹${amount}* to \`${userUpi}\`\n\n**If the button fails, copy the VPA and pay manually.**\n\n\`${userUpi}\``,
+        `🔗 *Payment Link for ₹${amount}* to \`${userUpi}\`\n\n**If the button fails, copy the VPA and pay manually.**`,
         {
             parse_mode: 'Markdown',
             ...Markup.inlineKeyboard([
-                // This URL button is the final step that opens the UPI app on your phone
-                Markup.button.url("🔥 Finalize Payment in UPI App", upiLink) 
+                // This is the new HTTPS link that should reliably open in Telegram
+                Markup.button.url("🔥 Finalize Payment in UPI App (HTTPS)", httpsRedirectLink) 
             ])
         }
     );
     
-    // Clean up the in-memory state after initiation (optional, can be kept until payment success)
+    // Clean up the in-memory state after initiation (optional)
     delete pendingGifts[adminRef];
 });
 
