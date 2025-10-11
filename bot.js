@@ -10,27 +10,38 @@ if (!TOKEN) {
   process.exit(1);
 }
 
-// === CONSTANTS ===
-const IMAGE_PATH = "Wishing Birthday.png";
+// NOTE: Since the image file is likely environment-specific, this path remains as you provided.
+const IMAGE_PATH = "Wishing Birthday.png"; 
+
 const TRIGGER_MESSAGE = "10/10/2002";
 const AUTHORIZED_NUMBERS = ["+918777072747", "+918777845713"];
 const ADMIN_CHAT_ID = 1299129410; // Your Telegram User ID
 const START_TIME = Date.now();
-const OWNER_UPI_ID = "9903403883@upi"; // The UPI ID that will receive the funds (You)
-
-// === State Management Constants ===
-const AWAITING_CONTACT = "awaiting_contact";
-const AWAITING_UPI = "awaiting_upi";
+// IMPORTANT: Replace this with your actual UPI Virtual Payment Address (VPA)
+const BOT_ADMIN_VPA = "shovith-admin@upi"; 
 
 // === Create bot instance ===
 const bot = new Telegraf(TOKEN);
-const userStates = {}; // user_id -> "awaiting_contact" | "awaiting_upi" | null
+
+// Global state tracking for multi-step interactions
+// user_id -> { state: "awaiting_contact" | "awaiting_upi" | null, data: { amount, upiId } }
+const userStates = {}; 
+
+// Global state to track gifts that need admin payment confirmation
+// ref_id -> { userId, userUpi, amount }
+const pendingGifts = {}; 
 
 // === Helper to send typing indicator ===
 async function sendTypingAction(ctx) {
     await ctx.replyWithChatAction('typing');
     // A short delay to make the typing indicator feel more natural
-    await new Promise(r => setTimeout(r, 800));
+    await new Promise(r => setTimeout(r, 600));
+}
+
+// Helper for basic UPI ID validation (VPA format: name.handle@bank)
+function isValidUpiId(upiId) {
+    // This is a simplified regex; a real system might need a more complex one
+    return /^[a-zA-Z0-9\.\-_]+@[a-zA-Z0-9\-]+$/.test(upiId.trim());
 }
 
 // === Keep-Alive Server (for hosting platforms like Render) ===
@@ -54,86 +65,80 @@ bot.start(async (ctx) => {
   await ctx.reply("Hi! Send the secret word you just copied to get your card! ❤️❤️❤️");
 });
 
-// === Handle Text Messages (Includes UPI ID Input) ===
+// === Handle Text Messages (Updated for UPI ID collection) ===
 bot.on("text", async (ctx) => {
   const userId = ctx.from.id;
-  const text = ctx.message.text.trim(); // Keep original casing for UPI ID handling
-  const lowerText = text.toLowerCase();
+  const text = ctx.message.text.trim();
 
-  // 1. Awaiting contact
-  if (userStates[userId] === AWAITING_CONTACT) {
+  // 1. Handle Awaiting UPI State
+  if (userStates[userId]?.state === "awaiting_upi") {
+    const upiId = text.toLowerCase();
+    
+    if (isValidUpiId(upiId)) {
+        await sendTypingAction(ctx);
+        await ctx.reply(`✅ Received UPI ID: \`${upiId}\`. Thank you!`, { parse_mode: 'Markdown' });
+        
+        // Update state with UPI ID
+        userStates[userId].data.upiId = upiId;
+        
+        // --- Random Number Picking Sequence ---
+        await sendTypingAction(ctx);
+        await ctx.reply("Calculating your surprise gift amount... this takes a moment! 🧐");
+        
+        // Simulate "choosing" the number
+        const giftAmount = Math.floor(Math.random() * 500) + 1; // 1 to 500
+        
+        // Update state with the final amount
+        userStates[userId].data.amount = giftAmount;
+
+        const numbers = [25, 100, 350, 50, giftAmount, 400];
+        
+        await new Promise((r) => setTimeout(r, 1000));
+        await sendTypingAction(ctx);
+        await ctx.reply(`Picking from potential gifts: ${numbers.join('... ')}`);
+        await new Promise((r) => setTimeout(r, 2000));
+        
+        await sendTypingAction(ctx);
+        await ctx.replyWithMarkdown(`🎉 You've been selected to receive a gift of *₹${giftAmount}*!`);
+        
+        // Present the final gift button
+        await ctx.reply("Click below to claim your gift immediately:", 
+            Markup.inlineKeyboard([
+                Markup.button.callback("🎁 Ask for Gift (₹" + giftAmount + ")", "ask_for_gift")
+            ])
+        );
+
+        // Clear UPI state since the next step is a button click
+        userStates[userId].state = null;
+
+    } else {
+        await sendTypingAction(ctx);
+        await ctx.reply("❌ Invalid UPI ID format. Please make sure it looks like `name@bank` (e.g., `user.123@ybl`) and try again.");
+    }
+    return;
+  }
+  
+  // 2. Handle Awaiting Contact State
+  if (userStates[userId]?.state === "awaiting_contact") {
     await sendTypingAction(ctx);
     await ctx.reply('Please use the "Share Contact" button to send your number.');
     return;
   }
-  
-  // 2. Awaiting UPI ID
-  if (userStates[userId] === AWAITING_UPI) {
-      await sendTypingAction(ctx);
 
-      // Basic UPI ID validation (must contain '@' and be a single string)
-      if (text.includes('@') && text.length > 5) {
-          const userUpiId = text;
-          const randomAmount = Math.floor(Math.random() * 500) + 1; // Random amount from 1 to 500
-          const transactionNote = `BirthdayGiftFor${userId}`;
-
-          // Standard UPI Query Parameters (the target, same for all links)
-          const upiParams = `pa=${OWNER_UPI_ID}&pn=Pratik%20Roy&mc=0000&tid=&am=${randomAmount}.00&cu=INR&tn=${transactionNote}`;
-
-          // Generate Platform-Specific Deep Links
-          // Note: Most apps accept the generic link, but using custom schemes increases the chance of opening the specific app.
-          const genericUpiLink = `upi://pay?${upiParams}`; // Fallback / BHIM / generic
-          const gpayLink = `gpay://upi/pay?${upiParams}`; // Google Pay specific scheme
-          const phonepeLink = `phonepe://pay?${upiParams}`; // PhonePe specific scheme
-          const paytmLink = `paytmmp://pay?${upiParams}`; // Paytm specific scheme
-
-          // Clear state
-          delete userStates[userId];
-
-          // Create buttons for different UPI apps, using their specific schemes
-          const paymentButtons = Markup.inlineKeyboard([
-              [
-                Markup.button.url("Google Pay 🟢", gpayLink),
-                Markup.button.url("PhonePe 🔵", phonepeLink),
-              ],
-              [
-                Markup.button.url("Paytm 🔴", paytmLink),
-                Markup.button.url("BHIM 🇮🇳", genericUpiLink), // BHIM relies heavily on the generic link
-              ]
-          ]);
-          
-          // Send payment request
-          await ctx.replyWithMarkdown(
-              `_Analyzing your unique request..._\n\n*Great news!* Your special gift is a token of appreciation worth *₹${randomAmount}*! 🎁\n\nPlease select your preferred app below to finalize the gift claim. You will initiate a token transaction to Pratik Roy to register your gift.\n\n_Token Amount: ₹${randomAmount}_\n_Payee: Pratik Roy (${OWNER_UPI_ID})_`,
-              { reply_markup: paymentButtons, parse_mode: 'Markdown' }
-          );
-
-          // Notify admin (optional but good for tracking)
-          await ctx.telegram.sendMessage(
-             ADMIN_CHAT_ID,
-             `🎁 Gift flow triggered for user @${ctx.from.username} (ID: ${userId}). Amount: ₹${randomAmount}. User UPI: ${userUpiId}`
-          );
-
-      } else {
-          await ctx.reply("That doesn't look like a valid UPI ID. Please try again (e.g., `name@bank`):");
-      }
-      return;
-  }
-
-  // 3. Trigger message flow
-  if (lowerText === TRIGGER_MESSAGE.toLowerCase()) {
+  // 3. Handle Trigger Message flow
+  if (text.toLowerCase() === TRIGGER_MESSAGE.toLowerCase()) {
     await sendTypingAction(ctx);
     await ctx.reply("🔍 Checking database to find matches...");
-    await new Promise((r) => setTimeout(r, 1500));
+    await new Promise((r) => setTimeout(r, 1000));
 
     await sendTypingAction(ctx);
     await ctx.reply("⌛ Waiting to receive response...");
-    await new Promise((r) => setTimeout(r, 1500));
+    await new Promise((r) => setTimeout(r, 1000));
 
     const contactButton = Markup.keyboard([[Markup.button.contactRequest("Share Contact")]]).oneTime().resize();
     await sendTypingAction(ctx);
     await ctx.reply("Please share your phone number to continue:", contactButton);
-    userStates[userId] = AWAITING_CONTACT;
+    userStates[userId] = { state: "awaiting_contact", data: {} };
     return;
   }
 
@@ -150,25 +155,22 @@ bot.on("contact", async (ctx) => {
   const userId = ctx.from.id;
   const contact = ctx.message.contact;
 
-  if (contact) {
+  if (contact && userStates[userId]?.state === "awaiting_contact") {
     // Once contact is shared, they are no longer awaiting it.
-    delete userStates[userId];
-    // Remove all custom keyboards
-    await ctx.reply("Thanks!", Markup.removeKeyboard());
-    
+    userStates[userId].state = null;
     const userNumber = contact.phone_number.replace("+", "");
     const authorizedNormalized = AUTHORIZED_NUMBERS.map((n) => n.replace("+", ""));
 
     if (authorizedNormalized.includes(userNumber)) {
       await sendTypingAction(ctx);
       await ctx.reply("📞 Checking back with your number...");
-      await new Promise((r) => setTimeout(r, 1500));
+      await new Promise((r) => setTimeout(r, 1000));
       
       await sendTypingAction(ctx);
       await ctx.reply("🔐 Authenticating...");
-      await new Promise((r) => setTimeout(r, 1500));
+      await new Promise((r) => setTimeout(r, 1000));
       
-      // Confirmation with Buttons
+      // --- NEW: Confirmation with Buttons ---
       const confirmationKeyboard = Markup.inlineKeyboard([
           Markup.button.callback("Yes, that's me!", "confirm_yes"),
           Markup.button.callback("No, that's not me", "confirm_no")
@@ -183,11 +185,14 @@ bot.on("contact", async (ctx) => {
       await sendTypingAction(ctx);
       await ctx.reply("🚫 Sorry! You're not authorized to perform this action.");
     }
+  } else if (contact) {
+      await sendTypingAction(ctx);
+      await ctx.reply("I already have your contact, please continue with the flow or send the trigger message again.");
   }
 });
 
 
-// === Handle "Yes" Confirmation Button ===
+// === Handle "Yes" Confirmation Button (Original Flow) ===
 bot.action('confirm_yes', async (ctx) => {
     // Edit the original message to show confirmation and remove buttons
     await ctx.editMessageText("✅ Identity confirmed! Preparing your card... 💫");
@@ -196,7 +201,7 @@ bot.action('confirm_yes', async (ctx) => {
     await sendTypingAction(ctx);
     await ctx.replyWithSticker('CAACAgEAAxkBAAEPieBo5pIfbsOvjPZ6aGZJzuszgj_RMwACMAQAAhyYKEevQOWk5-70BjYE');
 
-    await new Promise((r) => setTimeout(r, 3000));
+    await new Promise((r) => setTimeout(r, 2000));
 
     await sendTypingAction(ctx);
     await ctx.replyWithSticker('CAACAgEAAxkBAAEPf8Zo4QXOaaTjfwVq2EdaYp2t0By4UAAC-gEAAoyxIER4c3iI53gcxDYE');
@@ -206,6 +211,7 @@ bot.action('confirm_yes', async (ctx) => {
 
     await sendTypingAction(ctx);
     if (fs.existsSync(IMAGE_PATH)) {
+      // Assuming IMAGE_PATH is accessible by the bot's environment
       await ctx.replyWithPhoto({ source: IMAGE_PATH }, { caption: "🎁 Your card is ready — Tap to reveal!", has_spoiler: true });
     } else {
       await ctx.reply("😔 Sorry, the birthday card image is missing on the server.");
@@ -226,51 +232,148 @@ bot.action('confirm_yes', async (ctx) => {
     await ctx.reply("Please rate your experience:", ratingKeyboard);
 });
 
-// === Handle "No" Confirmation Button ===
+// === Handle "No" Confirmation Button (Original Flow) ===
 bot.action('confirm_no', async (ctx) => {
     await ctx.editMessageText("🚫 Sorry! You're not authorized to perform this action.");
 });
 
 
-// === Handle Ratings (Now leads to Gift Question) ===
+// === Handle Ratings (Updated to ask about the second gift) ===
 bot.action(/^rating_/, async (ctx) => {
   const rating = ctx.match.input.split("_")[1];
   const username = ctx.from.username || ctx.from.first_name;
 
+  // 1. Edit the rating message
   await ctx.editMessageText(`Thank you for your rating of ${rating} ⭐!`);
 
-  // No typing indicator needed for sending a message to the admin
+  // 2. Notify Admin
   await ctx.telegram.sendMessage(
     ADMIN_CHAT_ID,
     `User @${username} (ID: ${ctx.chat.id}) rated ${rating} ⭐`
   );
-  
-  // --- Ask about the next gift ---
+
+  // 3. Ask about the surprise gift
+  await sendTypingAction(ctx);
   const giftKeyboard = Markup.inlineKeyboard([
-      Markup.button.callback("Yes, please!", "ask_gift_yes"),
-      Markup.button.callback("No, thank you.", "ask_gift_no")
+    Markup.button.callback("Yes, I want a gift! 🥳", "gift_yes"),
+    Markup.button.callback("No, thank you.", "gift_no"),
   ]);
 
-  await sendTypingAction(ctx);
-  await ctx.reply("Before you go, would you like to check out another special gift?", giftKeyboard);
+  await ctx.replyWithMarkdown(
+    "That's wonderful! We have one more surprise. Would you like a *bonus mystery gift* from us?",
+    giftKeyboard
+  );
 });
 
-// === Handle "Yes, please!" to Gift Question (Awaiting UPI ID) ===
-bot.action('ask_gift_yes', async (ctx) => {
+// === Handle "Yes, I want a gift!" ===
+bot.action('gift_yes', async (ctx) => {
     const userId = ctx.from.id;
-    await ctx.editMessageText("Great! To proceed with your special gift, please send your valid UPI ID (e.g., `user@bank`):");
-    userStates[userId] = AWAITING_UPI;
+    await ctx.editMessageText("Great choice! To send you a surprise cash gift, we need your UPI ID (e.g., `user.123@ybl`).");
+    
+    await sendTypingAction(ctx);
+    await ctx.replyWithMarkdown("Please reply to this chat with your valid *UPI ID*:");
+
+    // Set user state to awaiting UPI
+    userStates[userId] = { 
+        state: "awaiting_upi", 
+        data: { amount: null, upiId: null } 
+    };
 });
 
-// === Handle "No, thank you." to Gift Question ===
-bot.action('ask_gift_no', async (ctx) => {
-    await ctx.editMessageText("No worries! Thanks again for celebrating with me. Have a wonderful day! ❤️");
-    delete userStates[ctx.from.id];
+// === Handle "No, thank you." ===
+bot.action('gift_no', async (ctx) => {
+    await ctx.editMessageText("No worries! Thanks again for celebrating with us. Enjoy your card! 😊");
+});
+
+// === Handle "Ask for Gift" (User Action) ===
+bot.action('ask_for_gift', async (ctx) => {
+    const userId = ctx.from.id;
+    const state = userStates[userId];
+
+    if (!state?.data.upiId || !state.data.amount) {
+        return ctx.reply("Sorry, I lost track of your details. Please restart the flow from the trigger message.");
+    }
+    
+    const { upiId, amount } = state.data;
+    
+    // Generate a unique reference ID for the payment (Admin-side tracking)
+    const refId = `BDAYGIFT${Date.now()}`; 
+    const adminRef = `ADMIN_${refId}`; // Ref ID for the admin message
+
+    // Store the transaction details globally before sending to Admin
+    pendingGifts[adminRef] = { userId, userUpi: upiId, amount };
+
+    // 1. Tell the user we're waiting
+    await ctx.editMessageText("⏳ Waiting for payment confirmation from the system...");
+    
+    // 2. Alert the Admin with the request
+    const adminNotificationText = `
+🚨 *NEW GIFT PAYMENT REQUIRED* 🚨
+
+**To User (ID: \`${userId}\`):**
+**Amount:** ₹${amount}
+**UPI ID:** \`${upiId}\`
+**Ref ID:** \`${refId}\`
+
+Please click the button below to generate and send the payment link.
+    `;
+
+    // The Admin clicks this button to generate the deep link
+    const adminKeyboard = Markup.inlineKeyboard([
+        Markup.button.callback(`✅ Send Payment Link (₹${amount})`, `admin_init_pay:${adminRef}`),
+    ]);
+
+    await ctx.telegram.sendMessage(
+        ADMIN_CHAT_ID,
+        adminNotificationText,
+        { parse_mode: 'Markdown', ...adminKeyboard }
+    );
 });
 
 
-// === Info & Socials Buttons ===
-// Typing indicators are not needed for editMessageText as it modifies an existing message
+// === Handle "Initialize Payment" (Admin Action) ===
+bot.action(/^admin_init_pay:/, async (ctx) => {
+    const adminRef = ctx.match.input.split(':')[1];
+    const giftData = pendingGifts[adminRef];
+    
+    // Security check: Only the Admin should proceed with this.
+    if (ctx.from.id !== ADMIN_CHAT_ID) {
+        return ctx.reply("🚫 You are not authorized to perform this admin action.");
+    }
+
+    if (!giftData) {
+        return ctx.editMessageText("❌ Error: Payment reference expired or not found.", { parse_mode: 'Markdown' });
+    }
+
+    const { userId, userUpi, amount } = giftData;
+    const refId = adminRef.replace('ADMIN_', '');
+    
+    // Construct the UPI Deep Link (Admin is the Payer, User is the Payee)
+    const upiLink = `upi://pay?pa=${userUpi}&pn=${encodeURIComponent("Gift Recipient")}&am=${amount}&cu=INR&tn=${encodeURIComponent(`Birthday Gift: ${refId}`)}&mc=5499&tr=${refId}&url=https://bot.link`;
+
+    // 1. Edit the Admin message to show the actual payment link
+    await ctx.editMessageText(
+        `🔗 *Payment Initiated for ₹${amount}* to \`${userUpi}\`. \n\nClick the button to open your UPI app and complete the transfer.`,
+        {
+            parse_mode: 'Markdown',
+            ...Markup.inlineKeyboard([
+                Markup.button.url("🚀 Open UPI App & Pay", upiLink)
+            ])
+        }
+    );
+
+    // 2. Notify the original user
+    await bot.telegram.sendMessage(
+        userId,
+        "✨ Payment initialization started! The process is underway. Please wait a few minutes, you'll soon receive your gift from the system. Thank you for your patience! 😊"
+    );
+    
+    // Clean up the in-memory state after initiation (optional, can be kept until payment success)
+    delete pendingGifts[adminRef];
+});
+
+
+// === Info & Socials Buttons (Original Flow) ===
 bot.action(["info","description","master","uptime","socials","back_to_menu"], async (ctx) => {
   const data = ctx.match.input;
   const uptimeSeconds = Math.floor((Date.now() - START_TIME) / 1000);
@@ -305,7 +408,7 @@ bot.action(["info","description","master","uptime","socials","back_to_menu"], as
 
     case "uptime":
       await ctx.editMessageText(
-        `⏱ *Uptime*\n\nYou've been using this bot for past \`${uptimeStr}\`.`,
+        `⏱ *Uptime*\n\nThis bot has been running for \`${uptimeStr}\`.`,
         { parse_mode:"Markdown", ...backButton }
       );
       break;
