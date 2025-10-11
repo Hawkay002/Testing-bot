@@ -62,8 +62,8 @@ app.get('/pay-redirect', (req, res) => {
     const upiLink = redirectLinkStore[id];
 
     if (upiLink) {
+        console.log(`[Redirect] Launching UPI link: ${upiLink}`);
         // Use a 302 Redirect to the upi:// scheme. 
-        // This is the most reliable way to launch a native app from an HTTPS link.
         res.redirect(302, upiLink);
         // Clean up the temporary link after use
         delete redirectLinkStore[id]; 
@@ -376,12 +376,18 @@ bot.action(/^admin_init_pay:/, async (ctx) => {
     const { userId, userUpi, amount } = giftData;
     const refId = adminRef.replace('ADMIN_', '');
     
-    // 1. Construct the UPI Deep Link
-    const upiLink = `upi://pay?pa=${userUpi}&pn=${encodeURIComponent("Gift Recipient")}&am=${amount}&cu=INR&tn=${encodeURIComponent(`Bday Gift Ref: ${refId}`)}&tr=${refId}`;
+    // 1. Construct the UPI Deep Link (Simplified to maximize compatibility)
+    // pa (Payee VPA), am (Amount), pn (Payee Name), tr (Transaction Reference)
+    const upiLink = `upi://pay?pa=${userUpi}&am=${amount}&pn=${encodeURIComponent("Bday Gift Payee")}&tr=${refId}`;
     
     // 2. Store the upi:// link with a temporary ID for the self-hosted redirect
     const redirectId = Math.random().toString(36).substring(2, 15);
     redirectLinkStore[redirectId] = upiLink;
+
+    // --- CONSOLE LOGGING FOR DEBUGGING ---
+    console.log(`[UPI Link Store] Stored ID: ${redirectId}`);
+    console.log(`[UPI Link Store] Stored Link: ${upiLink}`);
+    // --- END LOGGING ---
 
     // 3. Create the public HTTPS link pointing to our Express server
     const httpsRedirectLink = `${BOT_PUBLIC_BASE_URL}/pay-redirect?id=${redirectId}`;
@@ -395,7 +401,7 @@ bot.action(/^admin_init_pay:/, async (ctx) => {
     
     // 5. Edit the Admin message to show the HTTPS button
     await ctx.editMessageText(
-        `🔗 *Payment Link for ₹${amount}* to \`${userUpi}\`\n\n**If the button fails, copy the VPA and pay manually.**`,
+        `🔗 *Payment Link for ₹${amount}* to \`${userUpi}\`\n\n**If the button fails, copy the VPA (\`${userUpi}\`) and pay manually.**`,
         {
             parse_mode: 'Markdown',
             ...Markup.inlineKeyboard([
