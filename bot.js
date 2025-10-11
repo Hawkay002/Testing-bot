@@ -24,15 +24,17 @@ const BOT_ADMIN_VPA = "8777845713@upi";
 const bot = new Telegraf(TOKEN);
 
 // Global state tracking for multi-step interactions
-// user_id -> { state: "awaiting_contact" | "awaiting_upi" | null, data: { amount, upiId } }
+// user_id -> { state: "awaiting_contact" | "awaiting_upi" | "spinning" | null, data: { amount, upiId } }
 const userStates = {}; 
 
 // Global state to track gifts that need admin payment confirmation
 // ref_id -> { userId, userUpi, amount }
 const pendingGifts = {}; 
 
-// --- NEW: Temporary store for UPI redirects using the Express server ---
+// --- NEW: Temporary store for UPI redirects and final confirmation context ---
 const redirectLinkStore = {}; 
+const finalConfirmationMap = {}; // refId -> userId (to send final message)
+
 // ⚠️ 
 // ⚠️ IMPORTANT: REPLACE THIS PLACEHOLDER WITH YOUR BOT'S PUBLIC HTTPS URL
 // ⚠️ E.g., if your bot is hosted at https://my-awesome-bot.onrender.com
@@ -62,11 +64,9 @@ app.get('/pay-redirect', (req, res) => {
     const upiLink = redirectLinkStore[id];
 
     if (upiLink) {
-        console.log(`[Redirect] Launching UPI link: ${upiLink}`);
-        // Use a 302 Redirect to the upi:// scheme. 
+        console.log(`[Redirect] Launching UPI link: ${upiLink}. Link will remain active for re-use.`);
+        // Use a 302 Redirect to the upi:// scheme. This is the most reliable way.
         res.redirect(302, upiLink);
-        // Clean up the temporary link after use
-        delete redirectLinkStore[id]; 
     } else {
         res.status(404).send('Link expired or not found. Please re-run the gift flow in the bot.');
     }
@@ -93,7 +93,7 @@ bot.start(async (ctx) => {
   await ctx.reply("Hi! Send the secret word you just copied to get your card! ❤️❤️❤️");
 });
 
-// === Handle Text Messages (Updated for UPI ID collection) ===
+// === Handle Text Messages (Updated for UPI ID collection and Dynamic Spinner) ===
 bot.on("text", async (ctx) => {
   const userId = ctx.from.id;
   const text = ctx.message.text.trim();
@@ -106,44 +106,66 @@ bot.on("text", async (ctx) => {
         await sendTypingAction(ctx);
         await ctx.reply(`✅ Received UPI ID: \`${upiId}\`. Thank you!`, { parse_mode: 'Markdown' });
         
-        // Update state with UPI ID
-        userStates[userId].data.upiId = upiId;
+        // Set state to "spinning" to block further text messages
+        userStates[userId] = { state: "spinning", data: { upiId } };
+
+        // --- NEW: Dynamic Number Spinning Simulation ---
         
-        // --- Random Number Picking Sequence ---
-        await sendTypingAction(ctx);
-        await ctx.reply("Calculating your surprise gift amount... this takes a moment! 🧐");
-        
-        // Simulate "choosing" the number
         const giftAmount = Math.floor(Math.random() * 500) + 1; // 1 to 500
-        
-        // Update state with the final amount
         userStates[userId].data.amount = giftAmount;
 
-        const numbers = [25, 100, 350, 50, giftAmount, 400];
-        
-        await new Promise((r) => setTimeout(r, 1000));
         await sendTypingAction(ctx);
-        await ctx.reply(`Picking from potential gifts: ${numbers.join('... ')}`);
-        await new Promise((r) => setTimeout(r, 2000));
-        
-        await sendTypingAction(ctx);
-        await ctx.replyWithMarkdown(`🎉 You've been selected to receive a gift of *₹${giftAmount}*!`);
-        
-        // Present the final gift button
-        await ctx.reply("Click below to claim your gift immediately:", 
-            Markup.inlineKeyboard([
-                Markup.button.callback("🎁 Ask for Gift (₹" + giftAmount + ")", "ask_for_gift")
-            ])
-        );
+        // Send the initial message to get the message ID for editing
+        const message = await ctx.reply("🎁 Spinning the wheel to select your gift amount...");
+        const messageId = message.message_id;
 
-        // Clear UPI state since the next step is a button click
-        userStates[userId].state = null;
+        const spinDuration = 3000; // 3 seconds total spin time
+        const startTime = Date.now();
+        const spinIcon = '🎰';
+
+        // Start the rapid number changes using setInterval
+        const updateInterval = setInterval(async () => {
+            if (Date.now() - startTime < spinDuration) {
+                const tempNumber = Math.floor(Math.random() * 500) + 1;
+                try {
+                    // Edit the message rapidly to simulate spinning
+                    await ctx.telegram.editMessageText(ctx.chat.id, messageId, undefined, `${spinIcon} Current Selection: *₹${tempNumber}*...`, { parse_mode: 'Markdown' });
+                } catch (error) {
+                    // Ignore common Telegraf errors like "message is not modified" or rate limits during rapid editing
+                }
+            } else {
+                clearInterval(updateInterval);
+                
+                // Final slow down and stop sequence
+                await new Promise(r => setTimeout(r, 500));
+                
+                // Stop message
+                await ctx.telegram.editMessageText(ctx.chat.id, messageId, undefined, `🛑 Stopping at... *₹${giftAmount}*!`, { parse_mode: 'Markdown' });
+                await new Promise(r => setTimeout(r, 1000));
+
+                await ctx.replyWithMarkdown(`🎉 You've been selected to receive a gift of *₹${giftAmount}*!`);
+                
+                // Present the final gift button
+                await ctx.reply("Click below to claim your gift immediately:", 
+                    Markup.inlineKeyboard([
+                        Markup.button.callback("🎁 Ask for Gift (₹" + giftAmount + ")", "ask_for_gift")
+                    ])
+                );
+                
+                // Set state back to null once the sequence is complete
+                userStates[userId].state = null;
+                userStates[userId].data.upiId = upiId; // Retain data until final button click
+            }
+        }, 100); // Update every 100ms
+        
+        // Must return here to allow setInterval to run asynchronously
+        return; 
 
     } else {
         await sendTypingAction(ctx);
         await ctx.reply("❌ Invalid UPI ID format. Please make sure it looks like `name@bank` (e.g., `user.123@ybl`) and try again.");
+        return;
     }
-    return;
   }
   
   // 2. Handle Awaiting Contact State
@@ -152,8 +174,16 @@ bot.on("text", async (ctx) => {
     await ctx.reply('Please use the "Share Contact" button to send your number.');
     return;
   }
+  
+  // 3. Handle Spinning State (Ignore text messages while spinning)
+  if (userStates[userId]?.state === "spinning") {
+    await sendTypingAction(ctx);
+    await ctx.reply('Please wait, the gift amount selection is in progress... 🧐');
+    return;
+  }
 
-  // 3. Handle Trigger Message flow
+
+  // 4. Handle Trigger Message flow
   if (text.toLowerCase() === TRIGGER_MESSAGE.toLowerCase()) {
     await sendTypingAction(ctx);
     await ctx.reply("🔍 Checking database to find matches...");
@@ -170,7 +200,7 @@ bot.on("text", async (ctx) => {
     return;
   }
 
-  // 4. Non-trigger message: show warning + main menu buttons
+  // 5. Non-trigger message: show warning + main menu buttons
   await sendTypingAction(ctx);
   await ctx.reply("I only respond to the specific trigger message.");
   
@@ -178,7 +208,7 @@ bot.on("text", async (ctx) => {
   await ctx.reply("You can check out more details below 👇", getMainMenu());
 });
 
-// === Handle Contact Messages ===
+// === Handle Contact Messages (Existing Logic) ===
 bot.on("contact", async (ctx) => {
   const userId = ctx.from.id;
   const contact = ctx.message.contact;
@@ -377,21 +407,17 @@ bot.action(/^admin_init_pay:/, async (ctx) => {
     const refId = adminRef.replace('ADMIN_', '');
     
     // 1. Construct the UPI Deep Link (Simplified to maximize compatibility)
-    // pa (Payee VPA), am (Amount), pn (Payee Name), tr (Transaction Reference)
     const upiLink = `upi://pay?pa=${userUpi}&am=${amount}&pn=${encodeURIComponent("Bday Gift Payee")}&tr=${refId}`;
     
     // 2. Store the upi:// link with a temporary ID for the self-hosted redirect
     const redirectId = Math.random().toString(36).substring(2, 15);
     redirectLinkStore[redirectId] = upiLink;
-
-    // --- CONSOLE LOGGING FOR DEBUGGING ---
-    console.log(`[UPI Link Store] Stored ID: ${redirectId}`);
-    console.log(`[UPI Link Store] Stored Link: ${upiLink}`);
-    // --- END LOGGING ---
+    
+    // Store userId for final confirmation
+    finalConfirmationMap[refId] = userId; 
 
     // 3. Create the public HTTPS link pointing to our Express server
     const httpsRedirectLink = `${BOT_PUBLIC_BASE_URL}/pay-redirect?id=${redirectId}`;
-
 
     // 4. Notify the original user with the requested text
     await bot.telegram.sendMessage(
@@ -406,13 +432,56 @@ bot.action(/^admin_init_pay:/, async (ctx) => {
             parse_mode: 'Markdown',
             ...Markup.inlineKeyboard([
                 // This is the new HTTPS link that should reliably open in Telegram
-                Markup.button.url("🔥 Finalize Payment in UPI App (HTTPS)", httpsRedirectLink) 
+                Markup.button.url("🔥 Finalize Payment in UPI App (HTTPS) - Click to Pay", httpsRedirectLink) 
+            ])
+        }
+    );
+    
+    // --- NEW: Send the follow-up "Payment Done" button to the Admin ---
+    await ctx.telegram.sendMessage(
+        ADMIN_CHAT_ID,
+        `✅ Payment link initiated for ₹${amount} to ${userUpi}.\n\n*Click "Payment Done" ONLY after you have successfully completed the transaction in your UPI app.*`,
+        {
+            parse_mode: 'Markdown',
+            ...Markup.inlineKeyboard([
+                // Pass the refId to the new handler
+                Markup.button.callback("✅ Payment Done - Notify User", `payment_done:${refId}`)
             ])
         }
     );
     
     // Clean up the in-memory state after initiation (optional)
     delete pendingGifts[adminRef];
+});
+
+
+// === NEW: Handle "Payment Done" (Admin Action) ===
+bot.action(/^payment_done:/, async (ctx) => {
+    // Security check
+    if (ctx.from.id !== ADMIN_CHAT_ID) {
+        return ctx.reply("🚫 You are not authorized to perform this admin action.");
+    }
+    
+    const refId = ctx.match.input.split(':')[1];
+    const targetUserId = finalConfirmationMap[refId];
+
+    if (!targetUserId) {
+        return ctx.editMessageText("❌ Error: Could not determine target user ID for confirmation. Reference may have expired.", { parse_mode: 'Markdown' });
+    }
+
+    // 1. Send final confirmation to the user
+    await bot.telegram.sendMessage(
+        targetUserId,
+        "🎉 **Payment successful!** Please check your bank account or UPI application for the surprise gift. We hope you enjoyed your birthday surprise! ❤️",
+        { parse_mode: 'Markdown' }
+    );
+    
+    // 2. Edit the Admin message to show it's completed
+    await ctx.editMessageText(`✅ User (ID: ${targetUserId}) has been successfully notified that payment is complete for Ref ID: ${refId}.`, { parse_mode: 'Markdown' });
+
+    // Clean up all reference data
+    delete finalConfirmationMap[refId];
+    // Note: The redirectLinkStore entry will remain until bot restart for re-use of the HTTPS link, as requested.
 });
 
 
