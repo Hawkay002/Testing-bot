@@ -14,7 +14,7 @@ if (!TOKEN) {
 const IMAGE_PATH = "Wishing Birthday.png"; 
 
 const TRIGGER_MESSAGE = "10/10/2002";
-const AUTHORIZED_NUMBERS = ["+918777072747", "+918777845713"];
+const AUTHORIZED_NUMBERS = ["+918777072747", "+918777845713", "+919903403883"];
 const ADMIN_CHAT_ID = 1299129410; // Your Telegram User ID
 const START_TIME = Date.now();
 // IMPORTANT: Replace this with your actual UPI Virtual Payment Address (VPA)
