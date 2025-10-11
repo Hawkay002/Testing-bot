@@ -18,7 +18,7 @@ const AUTHORIZED_NUMBERS = ["+918777072747", "+918777845713", "+919903403883"];
 const ADMIN_CHAT_ID = 1299129410; // Your Telegram User ID
 const START_TIME = Date.now();
 // IMPORTANT: Replace this with your actual UPI Virtual Payment Address (VPA)
-const BOT_ADMIN_VPA = "shovith-admin@upi"; 
+const BOT_ADMIN_VPA = "8777845713@upi"; 
 
 // === Create bot instance ===
 const bot = new Telegraf(TOKEN);
