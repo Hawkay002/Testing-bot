@@ -1,41 +1,158 @@
 {
-  "8777072747": "Pratik Roy",
-  "8777845713": "Shovith Debnath (Admin)",
-  "9903403883": "Shankar Debnath",
-  "8276829124": "Sikha Debnath",
-  "6291539754": "Rinky (Tiyasha Debnath)",
-  "7439837109": "Dedipya Ghosh",
-  "7029559539": "Priya Debnath",
-  "8584885232": "Manta Di",
-  "8334889731": "Priya Debnath",
-  "8981984304": "Piku (Parthajeet Purkait)",
-  "9007874991": "Gourab Basak",
-  "8777763864": "Boro Hoye Duchir Vai Hobe (Bishal Manna)",
-  "7029540948": "Surajit(PU guy)",
-  "6290427060": "Sourav",
-  "9073840913": "Anindya-kun(holesome)",
-  "9382013068": "Priyam (Ryōta Watari)",
-  "9990179690": "Pratyush(club member)",
-  "8585877972": "Deep✨(HBO)",
-  "9804058422": "Subhodip Ghosh",
-  "6290267925": "The Bunip Mal",
-  "9073838579": "Soham-kun (Soham Halder)",
-  "9163150998": "Selfie Stick-kun (Rounak Roy Chowdhury)",
-  "9051175615": "Rahemin-san(WËÉNDER)",
-  "9239471875": "Prapti🦋 (Prapti Mukherjee)",
-  "9392518706": "Vizz",
-  "9093897325": "SaNjiB بالا(HBO)",
-  "8240799075": "Aniket PU",
-  "8337068121": "Rajashree",
-  "8697081911": "Mousumi Sil (The Lebu Gal)",
-  "8917752531": "NonStopBull PU",
-  "9007616275": "Vai Vai(U Know The Rest)",
-  "9073830534": "Madara R Jhaat Er Chul",
-  "7099164052": "Op Ricky Gamer",
-  "9007152024": "Souparno (PU)",
-  "9143610542": "IDK HOW BUT HE HAS MY INFO",
-  "8972255034": "S R E Y A J ! T( T_T ) - (HBO)",
-  "7596911784": "Aaishik Chatterjee",
-  "8017448401": "Dipmallo(PU)",
-  "9692695020": "Subhankar PU"
+  "8777072747": {
+    "name": "Pratik Roy",
+    "trigger": "10/10"
+  },
+  "8777845713": {
+    "name": "Shovith Debnath (Admin)",
+    "trigger": "10/10"
+  },
+  "9903403883": {
+    "name": "Shankar Debnath",
+    "trigger": "10/10"
+  },
+  "8276829124": {
+    "name": "Sikha Debnath",
+    "trigger": "10/10"
+  },
+  "6291539754": {
+    "name": "Rinky (Tiyasha Debnath)",
+    "trigger": ""
+  },
+  "7439837109": {
+    "name": "Dedipya Ghosh",
+    "trigger": "24/04"
+  },
+  "7029559539": {
+    "name": "Priya Debnath",
+    "trigger": ""
+  },
+  "8584885232": {
+    "name": "Manta Di",
+    "trigger": ""
+  },
+  "8334889731": {
+    "name": "Priya Debnath",
+    "trigger": ""
+  },
+  "8981984304": {
+    "name": "Piku (Parthajeet Purkait)",
+    "trigger": "31/03"
+  },
+  "9007874991": {
+    "name": "Gourab Basak",
+    "trigger": "10/04"
+  },
+  "8777763864": {
+    "name": "Boro Hoye Duchir Vai Hobe (Bishal Manna)",
+    "trigger": "13/10"
+  },
+  "7029540948": {
+    "name": "Surajit(PU guy)",
+    "trigger": "16/10"
+  },
+  "6290427060": {
+    "name": "Sourav",
+    "trigger": "16/11"
+  },
+  "9073840913": {
+    "name": "Anindya-kun(holesome)",
+    "trigger": ""
+  },
+  "9382013068": {
+    "name": "Priyam (Ryōta Watari)",
+    "trigger": "12/05"
+  },
+  "9990179690": {
+    "name": "Pratyush(club member)",
+    "trigger": ""
+  },
+  "8585877972": {
+    "name": "Deep✨(HBO)",
+    "trigger": "09/03"
+  },
+  "9804058422": {
+    "name": "Subhodip Ghosh",
+    "trigger": ""
+  },
+  "6290267925": {
+    "name": "The Bunip Mal",
+    "trigger": ""
+  },
+  "9073838579": {
+    "name": "Soham-kun (Soham Halder)",
+    "trigger": "17/03"
+  },
+  "9163150998": {
+    "name": "Selfie Stick-kun (Rounak Roy Chowdhury)",
+    "trigger": "04/09"
+  },
+  "9051175615": {
+    "name": "Rahemin-san(WËÉNDER)",
+    "trigger": "01/05"
+  },
+  "9239471875": {
+    "name": "Prapti🦋 (Prapti Mukherjee)",
+    "trigger": "27/03"
+  },
+  "9392518706": {
+    "name": "Vizz",
+    "trigger": "06/11"
+  },
+  "9093897325": {
+    "name": "SaNjiB بالا(HBO)",
+    "trigger": "22/11"
+  },
+  "8240799075": {
+    "name": "Aniket PU",
+    "trigger": ""
+  },
+  "8337068121": {
+    "name": "Rajashree",
+    "trigger": "03/11"
+  },
+  "8697081911": {
+    "name": "Mousumi Sil (The Lebu Gal)",
+    "trigger": "27/09"
+  },
+  "8917752531": {
+    "name": "NonStopBull PU",
+    "trigger": ""
+  },
+  "9007616275": {
+    "name": "Vai Vai(U Know The Rest)",
+    "trigger": ""
+  },
+  "9073830534": {
+    "name": "Madara R Jhaat Er Chul",
+    "trigger": "24/10"
+  },
+  "7099164052": {
+    "name": "Op Ricky Gamer",
+    "trigger": ""
+  },
+  "9007152024": {
+    "name": "Souparno (PU)",
+    "trigger": ""
+  },
+  "9143610542": {
+    "name": "IDK HOW BUT HE HAS MY INFO",
+    "trigger": "02/04"
+  },
+  "8972255034": {
+    "name": "S R E Y A J ! T( T_T ) - (HBO)",
+    "trigger": ""
+  },
+  "7596911784": {
+    "name": "Aaishik Chatterjee",
+    "trigger": "18/05"
+  },
+  "8017448401": {
+    "name": "Dipmallo(PU)",
+    "trigger": ""
+  },
+  "9692695020": {
+    "name": "Subhankar PU",
+    "trigger": "08/04"
+  }
 }
