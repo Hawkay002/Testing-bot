@@ -153,7 +153,7 @@ bot.on("text", async (ctx) => {
 
         await sendTypingAction(ctx);
         // Send the initial message to get the message ID for editing
-        const message = await ctx.reply("🎁 Spinning the wheel to select your gift amount...");
+        const message = await ctx.reply("🎁 Spinning the wheel to select your shagun amount...");
         const messageId = message.message_id;
 
         const spinDuration = 3000; // 3 seconds total spin time
@@ -180,12 +180,12 @@ bot.on("text", async (ctx) => {
                 await ctx.telegram.editMessageText(ctx.chat.id, messageId, undefined, `🛑 Stopping at... *₹${giftAmount}*!`, { parse_mode: 'Markdown' });
                 await new Promise(r => setTimeout(r, 1000));
 
-                await ctx.replyWithMarkdown(`🎉 You've been selected to receive a gift of *₹${giftAmount}*!`);
+                await ctx.replyWithMarkdown(`🎉 You've been selected to receive a shagun of *₹${giftAmount}*!`);
                 
                 // Present the final gift button
                 await ctx.reply("Click below to claim your gift immediately:", 
                     Markup.inlineKeyboard([
-                        Markup.button.callback("🎁 Ask for Gift (₹" + giftAmount + ")", "ask_for_gift")
+                        Markup.button.callback("🎁 Ask for Shagun (₹" + giftAmount + ")", "ask_for_gift")
                     ])
                 );
                 
@@ -411,7 +411,7 @@ bot.action('ask_for_gift', async (ctx) => {
     pendingGifts[adminRef] = { userId, userUpi: upiId, amount };
 
     // 1. Tell the user we're waiting
-    await ctx.editMessageText("⏳ Waiting for confirmation..."); // User sees this first
+    await ctx.editMessageText("⏳ Waiting for confirmation...\nThis might take a bit, so feel free to keep the chat open or close the app and carry on with your stuff.\nI’ll let you know as soon as I get the confirmation."); // User sees this first
     
     // 2. Alert the Admin with the request
     const adminNotificationText = `
@@ -521,7 +521,7 @@ bot.action(/^payment_done:/, async (ctx) => {
     // 1. Send final confirmation to the user
     await bot.telegram.sendMessage(
         targetUserId,
-        "🎉 **Payment successful!** Please check your bank account or UPI application for the surprise gift. We hope you enjoyed your birthday surprise! ❤️",
+        "🎉 **Shagun has been sent Successfully!** Please check your bank account or UPI application. We hope you enjoyed your birthday surprise! ❤️",
         { parse_mode: 'Markdown' }
     );
     
