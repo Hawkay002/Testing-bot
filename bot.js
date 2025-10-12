@@ -22,11 +22,10 @@ const BOT_PUBLIC_BASE_URL = "https://testing-bot-v328.onrender.com";
 // NOTE: Since the image file is likely environment-specific, this path remains as you provided.
 const IMAGE_PATH = "Wishing Birthday.png"; 
 
-// === Authorized Users Maps (Will be populated dynamically on startup) ===
-// 1. Map for number lookup: { "number": { name, trigger } }
-let AUTHORIZED_USERS_MAP = {}; 
-// 2. Map for trigger lookup: { "trigger": "number" }
-let TRIGGER_TO_NUMBER_MAP = {}; 
+const TRIGGER_MESSAGE = "10/10/2002";
+
+// === Authorized Users Map (Will be populated dynamically on startup) ===
+let AUTHORIZED_USERS_MAP = {};
 // ===============================================
 
 const ADMIN_CHAT_ID = 1299129410; // Your Telegram User ID
@@ -38,8 +37,7 @@ const BOT_ADMIN_VPA = "8777845713@upi";
 const bot = new Telegraf(TOKEN);
 
 // Global state tracking for multi-step interactions
-// user_id -> { state: "awaiting_contact" | "awaiting_upi" | "spinning" | null, 
-//              data: { amount, upiId, matchedName, expectedNumber } }
+// user_id -> { state: "awaiting_contact" | "awaiting_upi" | "spinning" | null, data: { amount, upiId, matchedName } }
 const userStates = {}; 
 
 // Global state to track gifts that need admin payment confirmation
@@ -61,40 +59,19 @@ async function loadAuthorizedUsers() {
             throw new Error(`Failed to fetch user list. HTTP status: ${response.status}`);
         }
 
-        const rawData = await response.json();
+        const data = await response.json();
         
         // Ensure the fetched data is a valid object
-        if (typeof rawData === 'object' && rawData !== null) {
-            let loadedUsers = 0;
-            const newTriggerMap = {};
-
-            for (const number in rawData) {
-                const userData = rawData[number];
-                
-                // CRITICAL VALIDATION CHECK: Checks if userData is an object and has required fields
-                if (typeof userData === 'object' && userData.name && userData.trigger !== undefined && /^\d{10}$/.test(number)) {
-                    // Populate primary map
-                    AUTHORIZED_USERS_MAP[number] = userData;
-                    
-                    // Only populate the trigger map if the trigger is NOT empty
-                    if (userData.trigger.trim() !== "") {
-                        newTriggerMap[userData.trigger.trim().toLowerCase()] = number; 
-                    }
-                    loadedUsers++;
-                } else {
-                    console.warn(`Skipping invalid user data for number: ${number}. Data may be a string instead of a nested object.`);
-                }
-            }
-            TRIGGER_TO_NUMBER_MAP = newTriggerMap;
-
-            console.log(`✅ Successfully loaded ${loadedUsers} authorized users.`);
-            console.log(`✅ Total active (non-empty) triggers loaded: ${Object.keys(TRIGGER_TO_NUMBER_MAP).length}`);
+        if (typeof data === 'object' && data !== null) {
+            AUTHORIZED_USERS_MAP = data;
+            const userCount = Object.keys(AUTHORIZED_USERS_MAP).length;
+            console.log(`✅ Successfully loaded ${userCount} authorized users.`);
         } else {
             throw new Error("Fetched data is not a valid JSON object map.");
         }
     } catch (error) {
         console.error(`❌ FATAL ERROR: Could not load authorized users from GitHub.`);
-        console.error("Please check the GITHUB_USERS_URL and ensure the file is public and valid JSON, using the required {name, trigger} structure.");
+        console.error("Please check the GITHUB_USERS_URL and ensure the file is public and valid JSON.");
         console.error(error);
         process.exit(1); // Exit if critical data cannot be loaded
     }
@@ -149,26 +126,25 @@ function getMainMenu() {
 // === /start Command ===
 bot.start(async (ctx) => {
   await sendTypingAction(ctx);
-  // Instruction updated to reflect unique trigger words (e.g., 10/10)
-  await ctx.reply("Hi! Send your unique secret word (e.g., your birthday in DD/MM format) to get your card! ❤️❤️❤️");
+  await ctx.reply("Hi! Send the secret word you just copied to get your card! ❤️❤️❤️");
 });
 
-// === Handle Text Messages (Updated for unique trigger words) ===
+// === Handle Text Messages (Updated for UPI ID collection and Dynamic Spinner) ===
 bot.on("text", async (ctx) => {
   const userId = ctx.from.id;
-  // Use lowercase for case-insensitive trigger check
-  const text = ctx.message.text.trim().toLowerCase(); 
-  
+  const text = ctx.message.text.trim();
+
   // 1. Handle Awaiting UPI State
   if (userStates[userId]?.state === "awaiting_upi") {
-    const upiId = text;
+    const upiId = text.toLowerCase();
     
     if (isValidUpiId(upiId)) {
         await sendTypingAction(ctx);
         await ctx.reply(`✅ Received UPI ID: \`${upiId}\`. Thank you!`, { parse_mode: 'Markdown' });
         
+        // Set state to "spinning" to block further text messages
         userStates[userId].state = "spinning";
-        userStates[userId].data.upiId = upiId; 
+        userStates[userId].data.upiId = upiId; // Store UPI ID
 
         // --- Dynamic Number Spinning Simulation ---
         
@@ -176,41 +152,51 @@ bot.on("text", async (ctx) => {
         userStates[userId].data.amount = giftAmount;
 
         await sendTypingAction(ctx);
-        const message = await ctx.reply("🎁 Spinning the wheel to select your shagun amount...");
+        // Send the initial message to get the message ID for editing
+        const message = await ctx.reply("🎁 Spinning the wheel to select your gift amount...");
         const messageId = message.message_id;
 
         const spinDuration = 3000; // 3 seconds total spin time
         const startTime = Date.now();
         const spinIcon = '🎰';
 
+        // Start the rapid number changes using setInterval
         const updateInterval = setInterval(async () => {
             if (Date.now() - startTime < spinDuration) {
                 const tempNumber = Math.floor(Math.random() * 500) + 1;
                 try {
+                    // Edit the message rapidly to simulate spinning
                     await ctx.telegram.editMessageText(ctx.chat.id, messageId, undefined, `${spinIcon} Current Selection: *₹${tempNumber}*...`, { parse_mode: 'Markdown' });
                 } catch (error) {
-                    // Ignore common Telegraf errors
+                    // Ignore common Telegraf errors like "message is not modified" or rate limits during rapid editing
                 }
             } else {
                 clearInterval(updateInterval);
                 
+                // Final slow down and stop sequence
                 await new Promise(r => setTimeout(r, 500));
                 
+                // Stop message
                 await ctx.telegram.editMessageText(ctx.chat.id, messageId, undefined, `🛑 Stopping at... *₹${giftAmount}*!`, { parse_mode: 'Markdown' });
                 await new Promise(r => setTimeout(r, 1000));
 
-                await ctx.replyWithMarkdown(`🎉 You've been selected to receive a shagun of *₹${giftAmount}*!`);
+                await ctx.replyWithMarkdown(`🎉 You've been selected to receive a gift of *₹${giftAmount}*!`);
                 
-                await ctx.reply("Click below to claim your shagun immediately:", 
+                // Present the final gift button
+                await ctx.reply("Click below to claim your gift immediately:", 
                     Markup.inlineKeyboard([
-                        Markup.button.callback("🎁 Ask for Shagun (₹" + giftAmount + ")", "ask_for_gift")
+                        Markup.button.callback("🎁 Ask for Gift (₹" + giftAmount + ")", "ask_for_gift")
                     ])
                 );
                 
+                // Set state back to null once the sequence is complete
                 userStates[userId].state = null;
+                // Retain data until final button click
+                // userStates[userId].data.upiId and .amount are already set
             }
-        }, 100); 
+        }, 100); // Update every 100ms
         
+        // Must return here to allow setInterval to run asynchronously
         return; 
 
     } else {
@@ -223,7 +209,7 @@ bot.on("text", async (ctx) => {
   // 2. Handle Awaiting Contact State
   if (userStates[userId]?.state === "awaiting_contact") {
     await sendTypingAction(ctx);
-    await ctx.reply('Please use the "Share Contact" button to send your number, or start over by sending your unique trigger word.');
+    await ctx.reply('Please use the "Share Contact" button to send your number.');
     return;
   }
   
@@ -234,66 +220,50 @@ bot.on("text", async (ctx) => {
     return;
   }
 
-  // 4. Handle Unique Trigger Message flow (NEW LOGIC)
-  // Look up the 10-digit number associated with the trigger text
-  const expectedNumber = TRIGGER_TO_NUMBER_MAP[text];
 
-  if (expectedNumber) {
-    // A valid unique trigger word was found
-    const userData = AUTHORIZED_USERS_MAP[expectedNumber];
-
+  // 4. Handle Trigger Message flow
+  if (text.toLowerCase() === TRIGGER_MESSAGE.toLowerCase()) {
     await sendTypingAction(ctx);
     await ctx.reply("🔍 Checking database to find matches...");
     await new Promise((r) => setTimeout(r, 1000));
 
     await sendTypingAction(ctx);
-    await ctx.reply(`🎉 Found a match for *${userData.name}*!`, { parse_mode: 'Markdown' });
+    await ctx.reply("⌛ Waiting to receive response...");
     await new Promise((r) => setTimeout(r, 1000));
 
-    // Save the expected number (which must match the contact shared next) and name
-    userStates[userId] = { 
-        state: "awaiting_contact", 
-        data: { 
-            expectedNumber: expectedNumber,
-            matchedName: userData.name
-        } 
-    };
-    
     const contactButton = Markup.keyboard([[Markup.button.contactRequest("Share Contact")]]).oneTime().resize();
     await sendTypingAction(ctx);
-    await ctx.reply("Please share your phone number to authenticate:", contactButton);
+    await ctx.reply("Please share your phone number to continue:", contactButton);
+    userStates[userId] = { state: "awaiting_contact", data: {} };
     return;
   }
 
   // 5. Non-trigger message: show warning + main menu buttons
   await sendTypingAction(ctx);
-  await ctx.reply("I only respond to a specific, unique trigger word.");
+  await ctx.reply("I only respond to the specific trigger message.");
   
   await sendTypingAction(ctx);
   await ctx.reply("You can check out more details below 👇", getMainMenu());
 });
 
-// === Handle Contact Messages (Updated for dynamic user name and number matching) ===
+// === Handle Contact Messages (Updated for dynamic user name lookup) ===
 bot.on("contact", async (ctx) => {
   const userId = ctx.from.id;
   const contact = ctx.message.contact;
-  const userState = userStates[userId];
 
-  // Check if the user is in the correct state AND has an expected number saved
-  if (contact && userState?.state === "awaiting_contact" && userState.data.expectedNumber) {
+  if (contact && userStates[userId]?.state === "awaiting_contact") {
+    // Once contact is shared, they are no longer awaiting it.
+    userStates[userId].state = null;
     
     // Normalize the user's phone number: remove all non-digits and take the last 10 digits
     const userNumberRaw = contact.phone_number.replace(/\D/g, "");
     const normalizedNumber = userNumberRaw.slice(-10);
     
-    const expectedNumber = userState.data.expectedNumber;
-    const matchedName = userState.data.matchedName;
+    const matchedName = AUTHORIZED_USERS_MAP[normalizedNumber];
 
-    // Critical check: Does the shared number match the number associated with the trigger they sent?
-    if (normalizedNumber === expectedNumber) {
-      
-      // Clear the contact request state
-      userStates[userId].state = null;
+    if (matchedName) {
+      // Store the name for confirmation later
+      userStates[userId].data.matchedName = matchedName;
       
       await sendTypingAction(ctx);
       await ctx.reply("📞 Checking back with your number...");
@@ -311,24 +281,21 @@ bot.on("contact", async (ctx) => {
 
       await sendTypingAction(ctx);
       await ctx.replyWithMarkdown(
-        `Identity confirmed! As per matches found in database, are you *${matchedName}*?`,
+        `As per matches found in database, are you *${matchedName}*?`,
         confirmationKeyboard
       );
     } else {
-      // Shared number does not match the expected number from the trigger
-      // Clear state and deny access
-      userStates[userId] = null;
       await sendTypingAction(ctx);
-      await ctx.reply("🚫 Authentication failed: The contact shared does not match the user associated with the unique trigger word you provided. Please start over.");
+      await ctx.reply("🚫 Sorry! Your number is not authorized to perform this action.");
     }
   } else if (contact) {
       await sendTypingAction(ctx);
-      await ctx.reply("I already have your contact, please continue with the flow or send your unique trigger word again.");
+      await ctx.reply("I already have your contact, please continue with the flow or send the trigger message again.");
   }
 });
 
 
-// === Handle "Yes" Confirmation Button (Original Flow) ===
+// === Handle "Yes" Confirmation Button (Updated to use the matched name) ===
 bot.action('confirm_yes', async (ctx) => {
     const userId = ctx.from.id;
     // Retrieve the matched name from state, defaulting if not found (shouldn't happen in flow)
@@ -395,12 +362,12 @@ bot.action(/^rating_/, async (ctx) => {
   // 3. Ask about the surprise gift
   await sendTypingAction(ctx);
   const giftKeyboard = Markup.inlineKeyboard([
-    Markup.button.callback("Yes, I want a shagun! 🥳", "gift_yes"),
+    Markup.button.callback("Yes, I want a gift! 🥳", "gift_yes"),
     Markup.button.callback("No, thank you.", "gift_no"),
   ]);
 
   await ctx.replyWithMarkdown(
-    "That's wonderful! We have one more surprise. Would you like a *bonus mystery shagun* from us?",
+    "That's wonderful! We have one more surprise. Would you like a *bonus mystery gift* from us?",
     giftKeyboard
   );
 });
@@ -408,7 +375,7 @@ bot.action(/^rating_/, async (ctx) => {
 // === Handle "Yes, I want a gift!" ===
 bot.action('gift_yes', async (ctx) => {
     const userId = ctx.from.id;
-    await ctx.editMessageText("Great choice! To send you a surprise cash shagun, we need your UPI ID (e.g., `user.123@ybl`).");
+    await ctx.editMessageText("Great choice! To send you a surprise cash gift, we need your UPI ID (e.g., `user.123@ybl`).");
     
     await sendTypingAction(ctx);
     await ctx.replyWithMarkdown("Please reply to this chat with your valid *UPI ID*:");
@@ -416,8 +383,7 @@ bot.action('gift_yes', async (ctx) => {
     // Set user state to awaiting UPI
     userStates[userId] = { 
         state: "awaiting_upi", 
-        // Retain existing data like expectedNumber and matchedName if available
-        data: userStates[userId]?.data || { amount: null, upiId: null, matchedName: null, expectedNumber: null } 
+        data: userStates[userId]?.data || { amount: null, upiId: null, matchedName: null } 
     };
 });
 
@@ -445,7 +411,7 @@ bot.action('ask_for_gift', async (ctx) => {
     pendingGifts[adminRef] = { userId, userUpi: upiId, amount };
 
     // 1. Tell the user we're waiting
-    await ctx.editMessageText("⏳ Waiting for confirmation...\nThis might take a bit, so feel free to keep the chat open or close the app and carry on with your stuff.\nI’ll let you know as soon as I get the confirmation."); // User sees this first
+    await ctx.editMessageText("⏳ Waiting for confirmation..."); // User sees this first
     
     // 2. Alert the Admin with the request
     const adminNotificationText = `
@@ -505,7 +471,7 @@ bot.action(/^admin_init_pay:/, async (ctx) => {
     // 4. Notify the original user with the requested text
     await bot.telegram.sendMessage(
         userId,
-        "✨ Payment initialization started, waiting for few minutes you'll soon receive your shagun. 😊"
+        "✨ Payment initialization started, waiting for few minutes you'll soon receive your gift. 😊"
     );
     
     // 5. Edit the Admin message to show the HTTPS button
@@ -555,7 +521,7 @@ bot.action(/^payment_done:/, async (ctx) => {
     // 1. Send final confirmation to the user
     await bot.telegram.sendMessage(
         targetUserId,
-        "🎉 **Your Shagun has been sent Successfully!** Please check your bank account or UPI application. We hope you enjoyed your birthday surprise! ❤️",
+        "🎉 **Payment successful!** Please check your bank account or UPI application for the surprise gift. We hope you enjoyed your birthday surprise! ❤️",
         { parse_mode: 'Markdown' }
     );
     
