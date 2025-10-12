@@ -1,6 +1,7 @@
 import { Telegraf, Markup } from "telegraf";
 import express from "express";
 import fs from "fs";
+// Assuming 'fetch' is available globally in the environment (e.g., modern Node.js environments)
 
 // === Bot Configuration ===
 // IMPORTANT: Set BOT_TOKEN in your hosting environment's variables.
@@ -10,11 +11,23 @@ if (!TOKEN) {
   process.exit(1);
 }
 
+// ⚠️ IMPORTANT: REPLACE THIS URL WITH THE RAW LINK TO YOUR GITHUB JSON FILE ⚠️
+const GITHUB_USERS_URL = "https://raw.githubusercontent.com/Hawkay002/Testing-bot/refs/heads/main/authorized_users.json";
+// ⚠️
+// ⚠️ IMPORTANT: REPLACE THIS PLACEHOLDER WITH YOUR BOT'S PUBLIC HTTPS URL
+// ⚠️ E.g., if your bot is hosted at https://my-awesome-bot.onrender.com
+const BOT_PUBLIC_BASE_URL = "https://testing-bot-v328.onrender.com"; 
+// ⚠️
+
 // NOTE: Since the image file is likely environment-specific, this path remains as you provided.
 const IMAGE_PATH = "Wishing Birthday.png"; 
 
 const TRIGGER_MESSAGE = "10/10/2002";
-const AUTHORIZED_NUMBERS = ["+918777072747", "+918777845713", "+919903403883"];
+
+// === Authorized Users Map (Will be populated dynamically on startup) ===
+let AUTHORIZED_USERS_MAP = {};
+// ===============================================
+
 const ADMIN_CHAT_ID = 1299129410; // Your Telegram User ID
 const START_TIME = Date.now();
 // IMPORTANT: Replace this with your actual UPI Virtual Payment Address (VPA)
@@ -24,23 +37,46 @@ const BOT_ADMIN_VPA = "8777845713@upi";
 const bot = new Telegraf(TOKEN);
 
 // Global state tracking for multi-step interactions
-// user_id -> { state: "awaiting_contact" | "awaiting_upi" | "spinning" | null, data: { amount, upiId } }
+// user_id -> { state: "awaiting_contact" | "awaiting_upi" | "spinning" | null, data: { amount, upiId, matchedName } }
 const userStates = {}; 
 
 // Global state to track gifts that need admin payment confirmation
 // ref_id -> { userId, userUpi, amount }
 const pendingGifts = {}; 
 
-// --- NEW: Temporary store for UPI redirects and final confirmation context ---
+// --- Temporary store for UPI redirects and final confirmation context ---
 const redirectLinkStore = {}; 
 const finalConfirmationMap = {}; // refId -> userId (to send final message)
 
-// ⚠️ 
-// ⚠️ IMPORTANT: REPLACE THIS PLACEHOLDER WITH YOUR BOT'S PUBLIC HTTPS URL
-// ⚠️ E.g., if your bot is hosted at https://my-awesome-bot.onrender.com
-const BOT_PUBLIC_BASE_URL = "https://testing-bot-v328.onrender.com"; 
-// ⚠️
-// ⚠️
+
+// === Function to load user data from GitHub ===
+async function loadAuthorizedUsers() {
+    console.log(`📡 Fetching authorized users from: ${GITHUB_USERS_URL}`);
+    try {
+        const response = await fetch(GITHUB_USERS_URL);
+        
+        if (!response.ok) {
+            throw new Error(`Failed to fetch user list. HTTP status: ${response.status}`);
+        }
+
+        const data = await response.json();
+        
+        // Ensure the fetched data is a valid object
+        if (typeof data === 'object' && data !== null) {
+            AUTHORIZED_USERS_MAP = data;
+            const userCount = Object.keys(AUTHORIZED_USERS_MAP).length;
+            console.log(`✅ Successfully loaded ${userCount} authorized users.`);
+        } else {
+            throw new Error("Fetched data is not a valid JSON object map.");
+        }
+    } catch (error) {
+        console.error(`❌ FATAL ERROR: Could not load authorized users from GitHub.`);
+        console.error("Please check the GITHUB_USERS_URL and ensure the file is public and valid JSON.");
+        console.error(error);
+        process.exit(1); // Exit if critical data cannot be loaded
+    }
+}
+
 
 // === Helper to send typing indicator ===
 async function sendTypingAction(ctx) {
@@ -107,9 +143,10 @@ bot.on("text", async (ctx) => {
         await ctx.reply(`✅ Received UPI ID: \`${upiId}\`. Thank you!`, { parse_mode: 'Markdown' });
         
         // Set state to "spinning" to block further text messages
-        userStates[userId] = { state: "spinning", data: { upiId } };
+        userStates[userId].state = "spinning";
+        userStates[userId].data.upiId = upiId; // Store UPI ID
 
-        // --- NEW: Dynamic Number Spinning Simulation ---
+        // --- Dynamic Number Spinning Simulation ---
         
         const giftAmount = Math.floor(Math.random() * 500) + 1; // 1 to 500
         userStates[userId].data.amount = giftAmount;
@@ -154,7 +191,8 @@ bot.on("text", async (ctx) => {
                 
                 // Set state back to null once the sequence is complete
                 userStates[userId].state = null;
-                userStates[userId].data.upiId = upiId; // Retain data until final button click
+                // Retain data until final button click
+                // userStates[userId].data.upiId and .amount are already set
             }
         }, 100); // Update every 100ms
         
@@ -208,7 +246,7 @@ bot.on("text", async (ctx) => {
   await ctx.reply("You can check out more details below 👇", getMainMenu());
 });
 
-// === Handle Contact Messages (Existing Logic) ===
+// === Handle Contact Messages (Updated for dynamic user name lookup) ===
 bot.on("contact", async (ctx) => {
   const userId = ctx.from.id;
   const contact = ctx.message.contact;
@@ -216,10 +254,17 @@ bot.on("contact", async (ctx) => {
   if (contact && userStates[userId]?.state === "awaiting_contact") {
     // Once contact is shared, they are no longer awaiting it.
     userStates[userId].state = null;
-    const userNumber = contact.phone_number.replace("+", "");
-    const authorizedNormalized = AUTHORIZED_NUMBERS.map((n) => n.replace("+", ""));
+    
+    // Normalize the user's phone number: remove all non-digits and take the last 10 digits
+    const userNumberRaw = contact.phone_number.replace(/\D/g, "");
+    const normalizedNumber = userNumberRaw.slice(-10);
+    
+    const matchedName = AUTHORIZED_USERS_MAP[normalizedNumber];
 
-    if (authorizedNormalized.includes(userNumber)) {
+    if (matchedName) {
+      // Store the name for confirmation later
+      userStates[userId].data.matchedName = matchedName;
+      
       await sendTypingAction(ctx);
       await ctx.reply("📞 Checking back with your number...");
       await new Promise((r) => setTimeout(r, 1000));
@@ -228,7 +273,7 @@ bot.on("contact", async (ctx) => {
       await ctx.reply("🔐 Authenticating...");
       await new Promise((r) => setTimeout(r, 1000));
       
-      // --- NEW: Confirmation with Buttons ---
+      // --- Confirmation with Dynamic Name ---
       const confirmationKeyboard = Markup.inlineKeyboard([
           Markup.button.callback("Yes, that's me!", "confirm_yes"),
           Markup.button.callback("No, that's not me", "confirm_no")
@@ -236,12 +281,12 @@ bot.on("contact", async (ctx) => {
 
       await sendTypingAction(ctx);
       await ctx.replyWithMarkdown(
-        'As per matches found in database, are you *Pratik Roy*?',
+        `As per matches found in database, are you *${matchedName}*?`,
         confirmationKeyboard
       );
     } else {
       await sendTypingAction(ctx);
-      await ctx.reply("🚫 Sorry! You're not authorized to perform this action.");
+      await ctx.reply("🚫 Sorry! Your number is not authorized to perform this action.");
     }
   } else if (contact) {
       await sendTypingAction(ctx);
@@ -250,10 +295,14 @@ bot.on("contact", async (ctx) => {
 });
 
 
-// === Handle "Yes" Confirmation Button (Original Flow) ===
+// === Handle "Yes" Confirmation Button (Updated to use the matched name) ===
 bot.action('confirm_yes', async (ctx) => {
+    const userId = ctx.from.id;
+    // Retrieve the matched name from state, defaulting if not found (shouldn't happen in flow)
+    const matchedName = userStates[userId]?.data?.matchedName || "the authorized user";
+    
     // Edit the original message to show confirmation and remove buttons
-    await ctx.editMessageText("✅ Identity confirmed! Preparing your card... 💫");
+    await ctx.editMessageText(`✅ Identity confirmed for *${matchedName}*! Preparing your card... 💫`, { parse_mode: 'Markdown' });
 
     // --- START: Sticker Sequence ---
     await sendTypingAction(ctx);
@@ -292,7 +341,7 @@ bot.action('confirm_yes', async (ctx) => {
 
 // === Handle "No" Confirmation Button (Original Flow) ===
 bot.action('confirm_no', async (ctx) => {
-    await ctx.editMessageText("🚫 Sorry! You're not authorized to perform this action.");
+    await ctx.editMessageText("🚫 Sorry! Authorization failed. Please try again or contact the administrator.");
 });
 
 
@@ -334,7 +383,7 @@ bot.action('gift_yes', async (ctx) => {
     // Set user state to awaiting UPI
     userStates[userId] = { 
         state: "awaiting_upi", 
-        data: { amount: null, upiId: null } 
+        data: userStates[userId]?.data || { amount: null, upiId: null, matchedName: null } 
     };
 });
 
@@ -437,7 +486,7 @@ bot.action(/^admin_init_pay:/, async (ctx) => {
         }
     );
     
-    // --- NEW: Send the follow-up "Payment Done" button to the Admin ---
+    // --- Send the follow-up "Payment Done" button to the Admin ---
     await ctx.telegram.sendMessage(
         ADMIN_CHAT_ID,
         `✅ Payment link initiated for ₹${amount} to ${userUpi}.\n\n*Click "Payment Done" ONLY after you have successfully completed the transaction in your UPI app.*`,
@@ -546,10 +595,19 @@ bot.action(["info","description","master","uptime","socials","back_to_menu"], as
   }
 });
 
-// === Start Bot ===
-bot.launch();
-console.log("🤖 Bot is running...");
+// === Main startup function ===
+async function main() {
+    // 1. Load data from the external GitHub source
+    await loadAuthorizedUsers();
+    
+    // 2. Start Bot
+    bot.launch();
+    console.log("🤖 Bot is running...");
+    
+    // 3. Graceful shutdown handlers
+    process.once("SIGINT", () => bot.stop("SIGINT"));
+    process.once("SIGTERM", () => bot.stop("SIGTERM"));
+}
 
-// Graceful shutdown
-process.once("SIGINT", () => bot.stop("SIGINT"));
-process.once("SIGTERM", () => bot.stop("SIGTERM"));
+// Execute main function
+main();
