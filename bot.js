@@ -22,8 +22,6 @@ const BOT_PUBLIC_BASE_URL = "https://testing-bot-v328.onrender.com";
 // NOTE: Since the image file is likely environment-specific, this path remains as you provided.
 const IMAGE_PATH = "Wishing Birthday.png"; 
 
-// 🛑 REMOVED: const TRIGGER_MESSAGE = "10/10/2002"; // Now dynamic per user
-
 // === Authorized Users Map (Will be populated dynamically on startup) ===
 // Structure: { "phoneNumber": { name: "User Name", trigger_word: "unique_word" } }
 let AUTHORIZED_USERS_MAP = {};
@@ -130,7 +128,7 @@ function getMainMenu() {
 // === /start Command ===
 bot.start(async (ctx) => {
   await sendTypingAction(ctx);
-  await ctx.reply("Hi! Send your unique secret word to get your personalized card! ❤️❤️❤️");
+  await ctx.reply("Hi! Send the secret word you just copied to get your personalized card! ❤️❤️❤️");
 });
 
 // === Handle Text Messages (Updated for dynamic trigger word check) ===
@@ -189,7 +187,7 @@ bot.on("text", async (ctx) => {
                 // Present the final gift button
                 await ctx.reply("Click below to claim your gift immediately:", 
                     Markup.inlineKeyboard([
-                        Markup.button.callback("🎁 Ask for Gift (₹" + giftAmount + ")", "ask_for_gift")
+                        Markup.button.callback("🎁 Ask for Shagun (₹" + giftAmount + ")", "ask_for_gift")
                     ])
                 );
                 
@@ -239,7 +237,7 @@ bot.on("text", async (ctx) => {
 
   if (matchedUserPhoneNumber) {
       await sendTypingAction(ctx);
-      await ctx.reply("🔍 Trigger word accepted. Checking database to find matches...");
+      await ctx.reply("🔍 Secret word accepted. Checking database to find matches...");
       await new Promise((r) => setTimeout(r, 1000));
 
       // Store the phone number and name associated with the trigger word for verification later
@@ -254,7 +252,7 @@ bot.on("text", async (ctx) => {
       const contactButton = Markup.keyboard([[Markup.button.contactRequest("Share Contact")]]).oneTime().resize();
       await sendTypingAction(ctx);
       await ctx.replyWithMarkdown(
-          `Hello, *${matchedUserData.name}*'s connection! Please share your phone number to continue verification:`, 
+          `Hello mate! Please share your phone number to continue verification:`, 
           contactButton
       );
       return;
@@ -441,7 +439,7 @@ bot.action('ask_for_gift', async (ctx) => {
     pendingGifts[adminRef] = { userId, userUpi: upiId, amount };
 
     // 1. Tell the user we're waiting
-    await ctx.editMessageText("⏳ Waiting for confirmation..."); // User sees this first
+    await ctx.editMessageText("⏳ Waiting for confirmation...\nThis might take a bit, so feel free to keep the chat open or close the app and carry on with your stuff.\nI’ll let you know as soon as I get the confirmation."); // User sees this first
     
     // 2. Alert the Admin with the request
     const adminNotificationText = `
@@ -501,7 +499,7 @@ bot.action(/^admin_init_pay:/, async (ctx) => {
     // 4. Notify the original user with the requested text
     await bot.telegram.sendMessage(
         userId,
-        "✨ Payment initialization started, waiting for few minutes you'll soon receive your gift. 😊"
+        "✨ Payment initialization started, waiting for few minutes you'll soon receive your shagun. 😊"
     );
     
     // 5. Edit the Admin message to show the HTTPS button
@@ -551,7 +549,7 @@ bot.action(/^payment_done:/, async (ctx) => {
     // 1. Send final confirmation to the user
     await bot.telegram.sendMessage(
         targetUserId,
-        "🎉 **Payment successful!** Please check your bank account or UPI application for the surprise gift. We hope you enjoyed your birthday surprise! ❤️",
+        "🎉 **Shagun has been sent Successfully!** Please check your bank account or UPI application. We hope you enjoyed your birthday surprise! ❤️",
         { parse_mode: 'Markdown' }
     );
     
