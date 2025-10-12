@@ -70,8 +70,9 @@ async function loadAuthorizedUsers() {
 
             for (const number in rawData) {
                 const userData = rawData[number];
-                // Validate data structure: number is 10 digits, name and trigger exist
-                if (userData.name && userData.trigger !== undefined && /^\d{10}$/.test(number)) {
+                
+                // CRITICAL VALIDATION CHECK: Checks if userData is an object and has required fields
+                if (typeof userData === 'object' && userData.name && userData.trigger !== undefined && /^\d{10}$/.test(number)) {
                     // Populate primary map
                     AUTHORIZED_USERS_MAP[number] = userData;
                     
@@ -81,7 +82,7 @@ async function loadAuthorizedUsers() {
                     }
                     loadedUsers++;
                 } else {
-                    console.warn(`Skipping invalid user data for number: ${number}`);
+                    console.warn(`Skipping invalid user data for number: ${number}. Data may be a string instead of a nested object.`);
                 }
             }
             TRIGGER_TO_NUMBER_MAP = newTriggerMap;
@@ -175,7 +176,7 @@ bot.on("text", async (ctx) => {
         userStates[userId].data.amount = giftAmount;
 
         await sendTypingAction(ctx);
-        const message = await ctx.reply("🎁 Spinning the wheel to select your gift amount...");
+        const message = await ctx.reply("🎁 Spinning the wheel to select your shagun amount...");
         const messageId = message.message_id;
 
         const spinDuration = 3000; // 3 seconds total spin time
@@ -200,7 +201,7 @@ bot.on("text", async (ctx) => {
 
                 await ctx.replyWithMarkdown(`🎉 You've been selected to receive a shagun of *₹${giftAmount}*!`);
                 
-                await ctx.reply("Click below to claim your gift immediately:", 
+                await ctx.reply("Click below to claim your shagun immediately:", 
                     Markup.inlineKeyboard([
                         Markup.button.callback("🎁 Ask for Shagun (₹" + giftAmount + ")", "ask_for_gift")
                     ])
@@ -394,12 +395,12 @@ bot.action(/^rating_/, async (ctx) => {
   // 3. Ask about the surprise gift
   await sendTypingAction(ctx);
   const giftKeyboard = Markup.inlineKeyboard([
-    Markup.button.callback("Yes, I want a gift! 🥳", "gift_yes"),
+    Markup.button.callback("Yes, I want a shagun! 🥳", "gift_yes"),
     Markup.button.callback("No, thank you.", "gift_no"),
   ]);
 
   await ctx.replyWithMarkdown(
-    "That's wonderful! We have one more surprise. Would you like a *bonus mystery gift* from us?",
+    "That's wonderful! We have one more surprise. Would you like a *bonus mystery shagun* from us?",
     giftKeyboard
   );
 });
@@ -407,7 +408,7 @@ bot.action(/^rating_/, async (ctx) => {
 // === Handle "Yes, I want a gift!" ===
 bot.action('gift_yes', async (ctx) => {
     const userId = ctx.from.id;
-    await ctx.editMessageText("Great choice! To send you a surprise cash gift, we need your UPI ID (e.g., `user.123@ybl`).");
+    await ctx.editMessageText("Great choice! To send you a surprise cash shagun, we need your UPI ID (e.g., `user.123@ybl`).");
     
     await sendTypingAction(ctx);
     await ctx.replyWithMarkdown("Please reply to this chat with your valid *UPI ID*:");
