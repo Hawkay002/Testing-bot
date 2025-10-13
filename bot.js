@@ -4,81 +4,161 @@ import fs from "fs";
 // Assuming 'fetch' is available globally in the environment (e.g., modern Node.js environments)
 
 // === Bot Configuration ===
-// IMPORTANT: Set BOT_TOKEN in your hosting environment's variables.
 const TOKEN = process.env.BOT_TOKEN;
 if (!TOKEN) {
   console.error("❌ BOT_TOKEN not found! Set it in your environment variables.");
   process.exit(1);
 }
 
-// ⚠️ IMPORTANT: REPLACE THIS URL WITH THE RAW LINK TO YOUR GITHUB JSON FILE ⚠️
-const GITHUB_USERS_URL = "https://raw.githubusercontent.com/Hawkay002/Testing-bot/refs/heads/main/authorized_users.json";
-// ⚠️
-// ⚠️ IMPORTANT: REPLACE THIS PLACEHOLDER WITH YOUR BOT'S PUBLIC HTTPS URL
-// ⚠️ E.g., if your bot is hosted at https://my-awesome-bot.onrender.com
+// ⚠️ IMPORTANT: Update these based on your GitHub setup ⚠️
+const GITHUB_TOKEN = process.env.GITHUB_TOKEN; // Required for file updates
+const GITHUB_OWNER = process.env.GITHUB_OWNER || 'Hawkay002'; // Your GitHub username
+const GITHUB_REPO = process.env.GITHUB_REPO || 'Testing-bot'; // Your repository name
+const GITHUB_FILE_PATH = process.env.GITHUB_FILE_PATH || 'authorized_users.json'; // The file to update
+const GITHUB_USERS_URL = `https://raw.githubusercontent.com/${GITHUB_OWNER}/${GITHUB_REPO}/main/${GITHUB_FILE_PATH}`;
+// ⚠️ 
 const BOT_PUBLIC_BASE_URL = "https://testing-bot-v328.onrender.com"; 
-// ⚠️
+// ⚠️ NEW: RENDER DEPLOY HOOK URL (Set this in Render environment variables) ⚠️
+const RENDER_DEPLOY_HOOK = process.env.RENDER_DEPLOY_HOOK;
+// ⚠️ 
 
-// NOTE: Since the image file is likely environment-specific, this path remains as you provided.
 const IMAGE_PATH = "Wishing Birthday.png"; 
 
 // === Authorized Users Map (Will be populated dynamically on startup) ===
 // Structure: { "phoneNumber": { name: "User Name", trigger_word: "unique_word" } }
 let AUTHORIZED_USERS_MAP = {};
+let GITHUB_FILE_SHA = null; // Store the current file SHA, required for updates
 // ===============================================
 
 const ADMIN_CHAT_ID = 1299129410; // Your Telegram User ID
 const START_TIME = Date.now();
-// IMPORTANT: Replace this with your actual UPI Virtual Payment Address (VPA)
 const BOT_ADMIN_VPA = "8777845713@upi"; 
 
 // === Create bot instance ===
 const bot = new Telegraf(TOKEN);
 
 // Global state tracking for multi-step interactions
-// user_id -> { 
-//   state: "awaiting_contact" | "awaiting_upi" | "spinning" | null, 
-//   data: { amount, upiId, matchedName, potentialPhoneNumber, potentialName } 
-// }
+// user_id -> { state: "awaiting_contact" | "awaiting_upi" | "spinning" | null, data: { ... } }
 const userStates = {}; 
-
-// Global state to track gifts that need admin payment confirmation
-// ref_id -> { userId, userUpi, amount }
 const pendingGifts = {}; 
-
-// --- Temporary store for UPI redirects and final confirmation context ---
 const redirectLinkStore = {}; 
-const finalConfirmationMap = {}; // refId -> userId (to send final message)
+const finalConfirmationMap = {};
 
-
-// === Function to load user data from GitHub ===
+// === Function to load user data from GitHub (and get SHA for future updates) ===
 async function loadAuthorizedUsers() {
     console.log(`📡 Fetching authorized users from: ${GITHUB_USERS_URL}`);
     try {
-        const response = await fetch(GITHUB_USERS_URL);
+        // Fetch the raw content
+        const contentResponse = await fetch(GITHUB_USERS_URL);
         
-        if (!response.ok) {
-            throw new Error(`Failed to fetch user list. HTTP status: ${response.status}`);
+        if (!contentResponse.ok) {
+            throw new Error(`Failed to fetch raw content. HTTP status: ${contentResponse.status}`);
         }
-
-        const data = await response.json();
+        const data = await contentResponse.json();
         
-        // Ensure the fetched data is a valid object
-        if (typeof data === 'object' && data !== null) {
+        // Fetch metadata to get the current SHA
+        const metadataUrl = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${GITHUB_FILE_PATH}`;
+        const metadataResponse = await fetch(metadataUrl, {
+            headers: { 'Authorization': `token ${GITHUB_TOKEN}` }
+        });
+        
+        if (!metadataResponse.ok) {
+             throw new Error(`Failed to fetch file metadata (SHA). HTTP status: ${metadataResponse.status}`);
+        }
+        const metadata = await metadataResponse.json();
+        
+        // Update global state
+        if (typeof data === 'object' && data !== null && metadata.sha) {
             AUTHORIZED_USERS_MAP = data;
+            GITHUB_FILE_SHA = metadata.sha;
             const userCount = Object.keys(AUTHORIZED_USERS_MAP).length;
-            console.log(`✅ Successfully loaded ${userCount} authorized users.`);
+            console.log(`✅ Loaded ${userCount} users. Current SHA: ${GITHUB_FILE_SHA}`);
         } else {
-            throw new Error("Fetched data is not a valid JSON object map.");
+            throw new Error("Fetched data is invalid or SHA is missing.");
         }
     } catch (error) {
         console.error(`❌ FATAL ERROR: Could not load authorized users from GitHub.`);
-        console.error("Please check the GITHUB_USERS_URL and ensure the file is public and valid JSON.");
-        console.error(error);
-        process.exit(1); // Exit if critical data cannot be loaded
+        console.error("Please ensure GITHUB_TOKEN, OWNER, REPO, and FILE_PATH are correct.");
+        console.error(error.message || error);
     }
 }
 
+// === Function to update the file content on GitHub ===
+async function updateAuthorizedUsersOnGithub(newContent, committerName, committerEmail) {
+    if (!GITHUB_TOKEN) {
+        throw new Error("GITHUB_TOKEN environment variable is not set.");
+    }
+    if (!GITHUB_FILE_SHA) {
+        throw new Error("Current file SHA is unknown. Cannot perform update.");
+    }
+    
+    // Base64 encode the new JSON content
+    const contentEncoded = Buffer.from(JSON.stringify(newContent, null, 2)).toString('base64');
+    
+    const apiUrl = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${GITHUB_FILE_PATH}`;
+
+    const payload = {
+        message: `feat(bot): Add new user via Telegram for ${newContent[Object.keys(newContent).pop()].name}`,
+        content: contentEncoded,
+        sha: GITHUB_FILE_SHA, // Must provide the current SHA for the update to work
+        committer: {
+            name: committerName,
+            email: committerEmail || 'telegram-bot@hawkay.com'
+        }
+    };
+    
+    console.log(`Attempting to update file at: ${apiUrl}`);
+
+    const response = await fetch(apiUrl, {
+        method: 'PUT',
+        headers: {
+            'Authorization': `token ${GITHUB_TOKEN}`,
+            'Content-Type': 'application/json',
+            'User-Agent': 'Telegraf-Admin-Bot'
+        },
+        body: JSON.stringify(payload)
+    });
+
+    if (response.ok) {
+        const result = await response.json();
+        // Update the SHA immediately for subsequent commits
+        GITHUB_FILE_SHA = result.content.sha;
+        console.log(`✅ GitHub update successful. New SHA: ${GITHUB_FILE_SHA}`);
+        return true;
+    } else {
+        const errorText = await response.text();
+        console.error(`❌ GitHub update failed. Status: ${response.status}. Response: ${errorText}`);
+        throw new Error(`GitHub API Error: ${response.statusText}. Check console for details.`);
+    }
+}
+
+// === NEW ADMIN FUNCTION: Trigger Render Redeploy ===
+async function adminRedeployService(ctx) {
+    if (!RENDER_DEPLOY_HOOK) {
+        return ctx.reply("❌ RENDER_DEPLOY_HOOK is not set in environment variables. Cannot redeploy.");
+    }
+    
+    await ctx.reply("🚀 Attempting to trigger a service redeploy on Render...");
+    
+    try {
+        // Render Deploy Hooks accept POST requests to trigger a new deployment
+        const response = await fetch(RENDER_DEPLOY_HOOK, {
+            method: 'POST',
+        });
+
+        if (response.ok) {
+            await ctx.reply("✅ Deploy hook successfully triggered! Render should now be building and restarting the service. This may take 1-3 minutes.");
+            console.log("Render redeploy triggered successfully.");
+        } else {
+            const errorText = await response.text();
+            await ctx.reply(`❌ Failed to trigger deploy hook. Status: ${response.status}. Error: ${errorText}`);
+            console.error(`Render redeploy failed: ${response.status} - ${errorText}`);
+        }
+    } catch (error) {
+        console.error("Error during redeploy fetch:", error);
+        await ctx.reply(`❌ An error occurred while contacting the Render service: ${error.message}`);
+    }
+}
 
 // === Helper to send typing indicator ===
 async function sendTypingAction(ctx) {
@@ -89,29 +169,20 @@ async function sendTypingAction(ctx) {
 
 // Helper for basic UPI ID validation (VPA format: name.handle@bank)
 function isValidUpiId(upiId) {
-    // This is a simplified regex; a real system might need a more complex one
     return /^[a-zA-Z0-9\.\-_]+@[a-zA-Z0-9\-]+$/.test(upiId.trim());
 }
 
 // === Keep-Alive Server (for hosting platforms like Render) ===
 const app = express();
-
-// 1. Redirect Endpoint to launch UPI App
 app.get('/pay-redirect', (req, res) => {
     const { id } = req.query;
     const upiLink = redirectLinkStore[id];
-
     if (upiLink) {
-        console.log(`[Redirect] Launching UPI link: ${upiLink}. Link will remain active for re-use.`);
-        // Use a 302 Redirect to the upi:// scheme. This is the most reliable way.
         res.redirect(302, upiLink);
     } else {
-        res.status(404).send('Link expired or not found. Please re-run the gift flow in the bot.');
+        res.status(404).send('Link expired or not found.');
     }
 });
-
-
-// 2. Main Keep-Alive endpoint
 app.get("/", (req, res) => res.send("✅ Bot server is alive and running!"));
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`🌐 Keep-alive server running on port ${PORT}`));
@@ -128,75 +199,152 @@ function getMainMenu() {
 // === /start Command ===
 bot.start(async (ctx) => {
   await sendTypingAction(ctx);
-  await ctx.reply("Hi! Send the secret word you just copied to get your personalized card! ❤️❤️❤️");
+  await ctx.reply("Hi! Send your unique secret word to get your personalized card! ❤️❤️❤️");
 });
 
-// === Handle Text Messages (Updated for dynamic trigger word check) ===
+// === Handle Text Messages (Updated for dynamic trigger word check and admin commands) ===
 bot.on("text", async (ctx) => {
   const userId = ctx.from.id;
   const text = ctx.message.text.trim();
+  const lowerText = text.toLowerCase();
+
+  // 0. Handle Admin Commands
+  if (userId === ADMIN_CHAT_ID) {
+      
+      // --- ADMIN COMMAND: /redeploy ---
+      if (lowerText === '/redeploy') {
+          return adminRedeployService(ctx);
+      }
+
+      // --- ADMIN COMMAND: /show_users ---
+      if (lowerText === '/show_users') {
+          await sendTypingAction(ctx);
+          if (Object.keys(AUTHORIZED_USERS_MAP).length === 0) {
+              return ctx.reply("The authorized user list is currently empty.");
+          }
+          
+          const userList = Object.entries(AUTHORIZED_USERS_MAP)
+              .map(([phone, data], index) => 
+                  `${index + 1}. *${data.name}* (\`${phone}\`) -> \`${data.trigger_word}\``
+              )
+              .join('\n');
+          
+          const header = `👤 *Authorized Users List* (${Object.keys(AUTHORIZED_USERS_MAP).length} total):\n\n`;
+          
+          // Telegram messages have a 4096 character limit
+          if (userList.length + header.length > 4096) {
+              await ctx.replyWithMarkdown(header + "List is too long, displaying partial content...");
+              // Simple splitting logic for large lists
+              const maxChunkSize = 3500;
+              for (let i = 0; i < userList.length; i += maxChunkSize) {
+                  await ctx.replyWithMarkdown(userList.substring(i, i + maxChunkSize));
+              }
+          } else {
+              await ctx.replyWithMarkdown(header + userList);
+          }
+
+          return;
+      }
+
+      // --- ADMIN COMMAND: /add_user (Updated separator to comma) ---
+      if (lowerText.startsWith('/add_user')) {
+          await sendTypingAction(ctx);
+          // Use comma as separator, then trim whitespace from all parts
+          const parts = text.slice('/add_user'.length).trim().split(',').map(p => p.trim());
+          
+          if (parts.length === 3) {
+              const [phoneNumber, name, triggerWord] = parts;
+              const phoneRegex = /^\d{10}$/;
+
+              if (!phoneRegex.test(phoneNumber)) {
+                  return ctx.reply("❌ Invalid phone number format. Must be 10 digits only (e.g., `9988776655`).");
+              }
+
+              if (Object.values(AUTHORIZED_USERS_MAP).some(user => user.trigger_word.toLowerCase() === triggerWord.toLowerCase())) {
+                  return ctx.reply(`❌ Trigger word **\`${triggerWord}\`** is already in use. Please choose another.`);
+              }
+              
+              if (AUTHORIZED_USERS_MAP[phoneNumber]) {
+                  return ctx.reply(`⚠️ User with phone number **\`${phoneNumber}\`** already exists. Use a different number.`);
+              }
+
+              try {
+                  // 1. Prepare new data structure
+                  const newAuthorizedUsers = { ...AUTHORIZED_USERS_MAP };
+                  newAuthorizedUsers[phoneNumber] = { 
+                      name: name, 
+                      trigger_word: triggerWord.toLowerCase() 
+                  };
+                  
+                  // 2. Update the file on GitHub
+                  await updateAuthorizedUsersOnGithub(newAuthorizedUsers, ctx.from.first_name, ctx.from.username ? `${ctx.from.username}@telegram.org` : 'admin@telegram.org');
+                  
+                  // 3. Update the local map immediately
+                  AUTHORIZED_USERS_MAP = newAuthorizedUsers;
+
+                  await ctx.replyWithMarkdown(`✅ User **${name}** added successfully!
+Phone: \`${phoneNumber}\`
+Trigger: \`${triggerWord}\`
+The new list is now live. Use \`/show_users\` to verify.`);
+                  
+              } catch (error) {
+                  console.error(error);
+                  await ctx.replyWithMarkdown(`❌ Failed to update GitHub file: ${error.message}. Please check logs and your GITHUB_TOKEN.`);
+              }
+              return;
+          } else {
+              return ctx.replyWithMarkdown("❌ Invalid command format. Use: `/add_user <10-digit phone>, <Full Name>, <unique_trigger>`");
+          }
+      }
+  }
+
 
   // 1. Handle Awaiting UPI State
   if (userStates[userId]?.state === "awaiting_upi") {
-    const upiId = text.toLowerCase();
+    const upiId = lowerText;
     
     if (isValidUpiId(upiId)) {
         await sendTypingAction(ctx);
         await ctx.reply(`✅ Received UPI ID: \`${upiId}\`. Thank you!`, { parse_mode: 'Markdown' });
         
-        // Set state to "spinning" to block further text messages
         userStates[userId].state = "spinning";
-        userStates[userId].data.upiId = upiId; // Store UPI ID
+        userStates[userId].data.upiId = upiId; 
 
-        // --- Dynamic Number Spinning Simulation ---
-        
-        const giftAmount = Math.floor(Math.random() * 500) + 1; // 1 to 500
+        const giftAmount = Math.floor(Math.random() * 500) + 1; 
         userStates[userId].data.amount = giftAmount;
 
         await sendTypingAction(ctx);
-        // Send the initial message to get the message ID for editing
         const message = await ctx.reply("🎁 Spinning the wheel to select your gift amount...");
         const messageId = message.message_id;
 
-        const spinDuration = 3000; // 3 seconds total spin time
+        const spinDuration = 3000;
         const startTime = Date.now();
         const spinIcon = '🎰';
 
-        // Start the rapid number changes using setInterval
         const updateInterval = setInterval(async () => {
             if (Date.now() - startTime < spinDuration) {
                 const tempNumber = Math.floor(Math.random() * 500) + 1;
                 try {
-                    // Edit the message rapidly to simulate spinning
                     await ctx.telegram.editMessageText(ctx.chat.id, messageId, undefined, `${spinIcon} Current Selection: *₹${tempNumber}*...`, { parse_mode: 'Markdown' });
-                } catch (error) {
-                    // Ignore common Telegraf errors like "message is not modified" or rate limits during rapid editing
-                }
+                } catch (error) {}
             } else {
                 clearInterval(updateInterval);
-                
-                // Final slow down and stop sequence
                 await new Promise(r => setTimeout(r, 500));
                 
-                // Stop message
                 await ctx.telegram.editMessageText(ctx.chat.id, messageId, undefined, `🛑 Stopping at... *₹${giftAmount}*!`, { parse_mode: 'Markdown' });
                 await new Promise(r => setTimeout(r, 1000));
 
                 await ctx.replyWithMarkdown(`🎉 You've been selected to receive a gift of *₹${giftAmount}*!`);
                 
-                // Present the final gift button
                 await ctx.reply("Click below to claim your gift immediately:", 
                     Markup.inlineKeyboard([
-                        Markup.button.callback("🎁 Ask for Shagun (₹" + giftAmount + ")", "ask_for_gift")
+                        Markup.button.callback("🎁 Ask for Gift (₹" + giftAmount + ")", "ask_for_gift")
                     ])
                 );
                 
-                // Set state back to null once the sequence is complete
                 userStates[userId].state = null;
             }
-        }, 100); // Update every 100ms
-        
-        // Must return here to allow setInterval to run asynchronously
+        }, 100); 
         return; 
 
     } else {
@@ -221,14 +369,13 @@ bot.on("text", async (ctx) => {
   }
 
 
-  // 4. Handle Dynamic Trigger Message flow
-  const trigger = text.toLowerCase();
+  // 4. Handle Dynamic Trigger Message flow (User flow)
   let matchedUserPhoneNumber = null;
   let matchedUserData = null;
 
   // Iterate through the authorized users to find a matching trigger word
   for (const [phoneNumber, userData] of Object.entries(AUTHORIZED_USERS_MAP)) {
-      if (userData && userData.trigger_word && userData.trigger_word.toLowerCase() === trigger) {
+      if (userData && userData.trigger_word && userData.trigger_word.toLowerCase() === lowerText) {
           matchedUserPhoneNumber = phoneNumber;
           matchedUserData = userData;
           break; // Found a match, stop searching
@@ -237,14 +384,13 @@ bot.on("text", async (ctx) => {
 
   if (matchedUserPhoneNumber) {
       await sendTypingAction(ctx);
-      await ctx.reply("🔍 Secret word accepted. Checking database to find matches...");
+      await ctx.reply("🔍 Trigger word accepted. Checking database to find matches...");
       await new Promise((r) => setTimeout(r, 1000));
 
-      // Store the phone number and name associated with the trigger word for verification later
       userStates[userId] = { 
           state: "awaiting_contact", 
           data: { 
-              potentialPhoneNumber: matchedUserPhoneNumber, // The number that MUST be shared
+              potentialPhoneNumber: matchedUserPhoneNumber, 
               potentialName: matchedUserData.name
           } 
       };
@@ -252,7 +398,7 @@ bot.on("text", async (ctx) => {
       const contactButton = Markup.keyboard([[Markup.button.contactRequest("Share Contact")]]).oneTime().resize();
       await sendTypingAction(ctx);
       await ctx.replyWithMarkdown(
-          `Hello mate! Please share your phone number to continue verification:`, 
+          `Hello, *${matchedUserData.name}*'s connection! Please share your phone number to continue verification:`, 
           contactButton
       );
       return;
@@ -272,25 +418,20 @@ bot.on("contact", async (ctx) => {
   const contact = ctx.message.contact;
 
   if (contact && userStates[userId]?.state === "awaiting_contact") {
-    // Retrieve the potentially matched phone number and name from the trigger step
     const { potentialPhoneNumber, potentialName } = userStates[userId].data || {};
 
-    // Once contact is shared, they are no longer awaiting it.
     userStates[userId].state = null;
     
     // Normalize the user's phone number: remove all non-digits and take the last 10 digits
     const userNumberRaw = contact.phone_number.replace(/\D/g, "");
     const normalizedNumber = userNumberRaw.slice(-10);
     
-    // Check 1: Does the shared contact number MATCH the potential phone number stored in state?
-    // Check 2: Does this number still exist in the authorized map (for safety)?
     const isVerificationSuccessful = (
         normalizedNumber === potentialPhoneNumber && 
         AUTHORIZED_USERS_MAP[normalizedNumber]
     );
 
     if (isVerificationSuccessful) {
-      // Store the name for confirmation later (we already have it from the trigger step)
       userStates[userId].data.matchedName = potentialName;
       
       await sendTypingAction(ctx);
@@ -301,7 +442,6 @@ bot.on("contact", async (ctx) => {
       await ctx.reply("🔐 Authenticating...");
       await new Promise((r) => setTimeout(r, 1000));
       
-      // --- Confirmation with Dynamic Name ---
       const confirmationKeyboard = Markup.inlineKeyboard([
           Markup.button.callback("Yes, that's me!", "confirm_yes"),
           Markup.button.callback("No, that's not me", "confirm_no")
@@ -323,30 +463,24 @@ bot.on("contact", async (ctx) => {
 });
 
 
-// === Handle "Yes" Confirmation Button (Updated to use the matched name) ===
+// === Handle "Yes" Confirmation Button (Original Flow) ===
 bot.action('confirm_yes', async (ctx) => {
     const userId = ctx.from.id;
-    // Retrieve the matched name from state, defaulting if not found (shouldn't happen in flow)
     const matchedName = userStates[userId]?.data?.matchedName || "the authorized user";
     
-    // Edit the original message to show confirmation and remove buttons
     await ctx.editMessageText(`✅ Identity confirmed for *${matchedName}*! Preparing your card... 💫`, { parse_mode: 'Markdown' });
 
     // --- START: Sticker Sequence ---
     await sendTypingAction(ctx);
     await ctx.replyWithSticker('CAACAgEAAxkBAAEPieBo5pIfbsOvjPZ6aGZJzuszgj_RMwACMAQAAhyYKEevQOWk5-70BjYE');
-
     await new Promise((r) => setTimeout(r, 2000));
-
     await sendTypingAction(ctx);
     await ctx.replyWithSticker('CAACAgEAAxkBAAEPf8Zo4QXOaaTjfwVq2EdaYp2t0By4UAAC-gEAAoyxIER4c3iI53gcxDYE');
-    
     await new Promise((r) => setTimeout(r, 1500));
     // --- END: Sticker Sequence ---
 
     await sendTypingAction(ctx);
     if (fs.existsSync(IMAGE_PATH)) {
-      // Assuming IMAGE_PATH is accessible by the bot's environment
       await ctx.replyWithPhoto({ source: IMAGE_PATH }, { caption: "🎁 Your card is ready — Tap to reveal!", has_spoiler: true });
     } else {
       await ctx.reply("😔 Sorry, the birthday card image is missing on the server.");
@@ -373,21 +507,18 @@ bot.action('confirm_no', async (ctx) => {
 });
 
 
-// === Handle Ratings (Updated to ask about the second gift) ===
+// === Handle Ratings (Original Flow) ===
 bot.action(/^rating_/, async (ctx) => {
   const rating = ctx.match.input.split("_")[1];
   const username = ctx.from.username || ctx.from.first_name;
 
-  // 1. Edit the rating message
   await ctx.editMessageText(`Thank you for your rating of ${rating} ⭐!`);
 
-  // 2. Notify Admin
   await ctx.telegram.sendMessage(
     ADMIN_CHAT_ID,
     `User @${username} (ID: ${ctx.chat.id}) rated ${rating} ⭐`
   );
 
-  // 3. Ask about the surprise gift
   await sendTypingAction(ctx);
   const giftKeyboard = Markup.inlineKeyboard([
     Markup.button.callback("Yes, I want a gift! 🥳", "gift_yes"),
@@ -400,7 +531,7 @@ bot.action(/^rating_/, async (ctx) => {
   );
 });
 
-// === Handle "Yes, I want a gift!" ===
+// === Gift Flow Actions (Original Flow) ===
 bot.action('gift_yes', async (ctx) => {
     const userId = ctx.from.id;
     await ctx.editMessageText("Great choice! To send you a surprise cash gift, we need your UPI ID (e.g., `user.123@ybl`).");
@@ -408,19 +539,16 @@ bot.action('gift_yes', async (ctx) => {
     await sendTypingAction(ctx);
     await ctx.replyWithMarkdown("Please reply to this chat with your valid *UPI ID*:");
 
-    // Set user state to awaiting UPI
     userStates[userId] = { 
         state: "awaiting_upi", 
         data: userStates[userId]?.data || { amount: null, upiId: null, matchedName: null } 
     };
 });
 
-// === Handle "No, thank you." ===
 bot.action('gift_no', async (ctx) => {
     await ctx.editMessageText("No worries! Thanks again for celebrating with us. Enjoy your card! 😊");
 });
 
-// === Handle "Ask for Gift" (User Action) ===
 bot.action('ask_for_gift', async (ctx) => {
     const userId = ctx.from.id;
     const state = userStates[userId];
@@ -430,18 +558,13 @@ bot.action('ask_for_gift', async (ctx) => {
     }
     
     const { upiId, amount } = state.data;
-    
-    // Generate a unique reference ID for the payment (Admin-side tracking)
     const refId = `BDAYGIFT${Date.now()}`; 
-    const adminRef = `ADMIN_${refId}`; // Ref ID for the admin message
+    const adminRef = `ADMIN_${refId}`; 
 
-    // Store the transaction details globally before sending to Admin
     pendingGifts[adminRef] = { userId, userUpi: upiId, amount };
 
-    // 1. Tell the user we're waiting
-    await ctx.editMessageText("⏳ Waiting for confirmation...\nThis might take a bit, so feel free to keep the chat open or close the app and carry on with your stuff.\nI’ll let you know as soon as I get the confirmation."); // User sees this first
+    await ctx.editMessageText("⏳ Waiting for confirmation..."); 
     
-    // 2. Alert the Admin with the request
     const adminNotificationText = `
 🚨 *NEW GIFT PAYMENT REQUIRED* 🚨
 
@@ -453,7 +576,6 @@ bot.action('ask_for_gift', async (ctx) => {
 Click below to initialize the payment and generate the **HTTPS Redirect Link**.
     `;
 
-    // The Admin clicks this button to generate the deep link and notify the user
     const adminKeyboard = Markup.inlineKeyboard([
         Markup.button.callback(`🚀 Initialize Payment Link (₹${amount})`, `admin_init_pay:${adminRef}`),
     ]);
@@ -466,12 +588,10 @@ Click below to initialize the payment and generate the **HTTPS Redirect Link**.
 });
 
 
-// === Handle "Initialize Payment Link" (Admin Action) ===
 bot.action(/^admin_init_pay:/, async (ctx) => {
     const adminRef = ctx.match.input.split(':')[1];
     const giftData = pendingGifts[adminRef];
     
-    // Security check: Only the Admin should proceed with this.
     if (ctx.from.id !== ADMIN_CHAT_ID) {
         return ctx.reply("🚫 You are not authorized to perform this admin action.");
     }
@@ -483,58 +603,46 @@ bot.action(/^admin_init_pay:/, async (ctx) => {
     const { userId, userUpi, amount } = giftData;
     const refId = adminRef.replace('ADMIN_', '');
     
-    // 1. Construct the UPI Deep Link (Simplified to maximize compatibility)
     const upiLink = `upi://pay?pa=${userUpi}&am=${amount}&pn=${encodeURIComponent("Bday Gift Payee")}&tr=${refId}`;
     
-    // 2. Store the upi:// link with a temporary ID for the self-hosted redirect
     const redirectId = Math.random().toString(36).substring(2, 15);
     redirectLinkStore[redirectId] = upiLink;
     
-    // Store userId for final confirmation
     finalConfirmationMap[refId] = userId; 
 
-    // 3. Create the public HTTPS link pointing to our Express server
     const httpsRedirectLink = `${BOT_PUBLIC_BASE_URL}/pay-redirect?id=${redirectId}`;
 
-    // 4. Notify the original user with the requested text
     await bot.telegram.sendMessage(
         userId,
-        "✨ Payment initialization started, waiting for few minutes you'll soon receive your shagun. 😊"
+        "✨ Payment initialization started, waiting for few minutes you'll soon receive your gift. 😊"
     );
     
-    // 5. Edit the Admin message to show the HTTPS button
     await ctx.editMessageText(
         `🔗 *Payment Link for ₹${amount}* to \`${userUpi}\`\n\n**If the button fails, copy the VPA (\`${userUpi}\`) and pay manually.**`,
         {
             parse_mode: 'Markdown',
             ...Markup.inlineKeyboard([
-                // This is the new HTTPS link that should reliably open in Telegram
                 Markup.button.url("🔥 Finalize Payment in UPI App (HTTPS) - Click to Pay", httpsRedirectLink) 
             ])
         }
     );
     
-    // --- Send the follow-up "Payment Done" button to the Admin ---
     await ctx.telegram.sendMessage(
         ADMIN_CHAT_ID,
         `✅ Payment link initiated for ₹${amount} to ${userUpi}.\n\n*Click "Payment Done" ONLY after you have successfully completed the transaction in your UPI app.*`,
         {
             parse_mode: 'Markdown',
             ...Markup.inlineKeyboard([
-                // Pass the refId to the new handler
                 Markup.button.callback("✅ Payment Done - Notify User", `payment_done:${refId}`)
             ])
         }
     );
     
-    // Clean up the in-memory state after initiation (optional)
     delete pendingGifts[adminRef];
 });
 
 
-// === NEW: Handle "Payment Done" (Admin Action) ===
 bot.action(/^payment_done:/, async (ctx) => {
-    // Security check
     if (ctx.from.id !== ADMIN_CHAT_ID) {
         return ctx.reply("🚫 You are not authorized to perform this admin action.");
     }
@@ -546,19 +654,15 @@ bot.action(/^payment_done:/, async (ctx) => {
         return ctx.editMessageText("❌ Error: Could not determine target user ID for confirmation. Reference may have expired.", { parse_mode: 'Markdown' });
     }
 
-    // 1. Send final confirmation to the user
     await bot.telegram.sendMessage(
         targetUserId,
-        "🎉 **Shagun has been sent Successfully!** Please check your bank account or UPI application. We hope you enjoyed your birthday surprise! ❤️",
+        "🎉 **Payment successful!** Please check your bank account or UPI application for the surprise gift. We hope you enjoyed your birthday surprise! ❤️",
         { parse_mode: 'Markdown' }
     );
     
-    // 2. Edit the Admin message to show it's completed
     await ctx.editMessageText(`✅ User (ID: ${targetUserId}) has been successfully notified that payment is complete for Ref ID: ${refId}.`, { parse_mode: 'Markdown' });
 
-    // Clean up all reference data
     delete finalConfirmationMap[refId];
-    // Note: The redirectLinkStore entry will remain until bot restart for re-use of the HTTPS link, as requested.
 });
 
 
@@ -625,7 +729,13 @@ bot.action(["info","description","master","uptime","socials","back_to_menu"], as
 
 // === Main startup function ===
 async function main() {
-    // 1. Load data from the external GitHub source
+    if (!GITHUB_TOKEN) {
+        console.warn("⚠️ WARNING: GITHUB_TOKEN is not set. Admin GitHub update feature will NOT work.");
+    }
+    if (!RENDER_DEPLOY_HOOK) {
+        console.warn("⚠️ WARNING: RENDER_DEPLOY_HOOK is not set. Admin /redeploy feature will NOT work.");
+    }
+    // 1. Load data from the external GitHub source and get the current SHA
     await loadAuthorizedUsers();
     
     // 2. Start Bot
