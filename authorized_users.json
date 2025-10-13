@@ -1,41 +1,162 @@
 {
-  "8777072747": { "name": "Pratik Roy", "trigger_word": "pratikday" },
-  "8777845713": { "name": "Shovith Debnath (Admin)", "trigger_word": "shovithday" },
-  "9903403883": { "name": "Shankar Debnath", "trigger_word": "shankarbday" },
-  "8276829124": { "name": "Sikha Debnath", "trigger_word": "sikhaji" },
-  "6291539754": { "name": "Rinky (Tiyasha Debnath)", "trigger_word": "rinkybday" },
-  "7439837109": { "name": "Dedipya Ghosh", "trigger_word": "dedibday" },
-  "7029559539": { "name": "Priya Debnath", "trigger_word": "priyaone" },
-  "8584885232": { "name": "Manta Di", "trigger_word": "manta" },
-  "8334889731": { "name": "Priya Debnath", "trigger_word": "priyatwo" },
-  "8981984304": { "name": "Piku (Parthajeet Purkait)", "trigger_word": "piku" },
-  "9007874991": { "name": "Gourab Basak", "trigger_word": "gourab" },
-  "8777763864": { "name": "Boro Hoye Duchir Vai Hobe (Bishal Manna)", "trigger_word": "bishal" },
-  "7029540948": { "name": "Surajit(PU guy)", "trigger_word": "surajit" },
-  "6290427060": { "name": "Sourav", "trigger_word": "sourav" },
-  "9073840913": { "name": "Anindya-kun(holesome)", "trigger_word": "anindya" },
-  "9382013068": { "name": "Priyam (Ryōta Watari)", "trigger_word": "priyam" },
-  "9990179690": { "name": "Pratyush(club member)", "trigger_word": "pratyush" },
-  "8585877972": { "name": "Deep✨(HBO)", "trigger_word": "deep" },
-  "9804058422": { "name": "Subhodip Ghosh", "trigger_word": "subhodip" },
-  "6290267925": { "name": "The Bunip Mal", "trigger_word": "bunip" },
-  "9073838579": { "name": "Soham-kun (Soham Halder)", "trigger_word": "soham" },
-  "9163150998": { "name": "Selfie Stick-kun (Rounak Roy Chowdhury)", "trigger_word": "rounak" },
-  "9051175615": { "name": "Rahemin-san(WËÉNDER)", "trigger_word": "rahemin" },
-  "9239471875": { "name": "Prapti🦋 (Prapti Mukherjee)", "trigger_word": "prapti" },
-  "9392518706": { "name": "Vizz", "trigger_word": "vizz" },
-  "9093897325": { "name": "SaNjiB بالا(HBO)", "trigger_word": "sanjib" },
-  "8240799075": { "name": "Aniket PU", "trigger_word": "aniket" },
-  "8337068121": { "name": "Rajashree", "trigger_word": "rajashree" },
-  "8697081911": { "name": "Mousumi Sil (The Lebu Gal)", "trigger_word": "lebugal" },
-  "8917752531": { "name": "NonStopBull PU", "trigger_word": "nonstop" },
-  "9007616275": { "name": "Vai Vai(U Know The Rest)", "trigger_word": "vaivai" },
-  "9073830534": { "name": "Madara R Jhaat Er Chul", "trigger_word": "madara" },
-  "7099164052": { "name": "Op Ricky Gamer", "trigger_word": "ricky" },
-  "9007152024": { "name": "Souparno (PU)", "trigger_word": "souparno" },
-  "9143610542": { "name": "IDK HOW BUT HE HAS MY INFO", "trigger_word": "idkhow" },
-  "8972255034": { "name": "S R E Y A J ! T( T_T ) - (HBO)", "trigger_word": "sreyajit" },
-  "7596911784": { "name": "Aaishik Chatterjee", "trigger_word": "aaishik" },
-  "8017448401": { "name": "Dipmallo(PU)", "trigger_word": "dipmallo" },
-  "9692695020": { "name": "Subhankar PU", "trigger_word": "subhankar" }
+  "8777072747": {
+    "name": "Pratik Roy",
+    "trigger_word": "pratikday"
+  },
+  "8777845713": {
+    "name": "Shovith Debnath (Admin)",
+    "trigger_word": "shovithday"
+  },
+  "9903403883": {
+    "name": "Shankar Debnath",
+    "trigger_word": "shankarbday"
+  },
+  "8276829124": {
+    "name": "Sikha Debnath",
+    "trigger_word": "sikhaji"
+  },
+  "6291539754": {
+    "name": "Rinky (Tiyasha Debnath)",
+    "trigger_word": "rinkybday"
+  },
+  "7439837109": {
+    "name": "Dedipya Ghosh",
+    "trigger_word": "dedibday"
+  },
+  "7029559539": {
+    "name": "Priya Debnath",
+    "trigger_word": "priyaone"
+  },
+  "8584885232": {
+    "name": "Manta Di",
+    "trigger_word": "manta"
+  },
+  "8334889731": {
+    "name": "Priya Debnath",
+    "trigger_word": "priyatwo"
+  },
+  "8981984304": {
+    "name": "Piku (Parthajeet Purkait)",
+    "trigger_word": "piku"
+  },
+  "9007874991": {
+    "name": "Gourab Basak",
+    "trigger_word": "gourab"
+  },
+  "8777763864": {
+    "name": "Boro Hoye Duchir Vai Hobe (Bishal Manna)",
+    "trigger_word": "bishal"
+  },
+  "7029540948": {
+    "name": "Surajit(PU guy)",
+    "trigger_word": "surajit"
+  },
+  "6290427060": {
+    "name": "Sourav",
+    "trigger_word": "sourav"
+  },
+  "9073840913": {
+    "name": "Anindya-kun(holesome)",
+    "trigger_word": "anindya"
+  },
+  "9382013068": {
+    "name": "Priyam (Ryōta Watari)",
+    "trigger_word": "priyam"
+  },
+  "9990179690": {
+    "name": "Pratyush(club member)",
+    "trigger_word": "pratyush"
+  },
+  "8585877972": {
+    "name": "Deep✨(HBO)",
+    "trigger_word": "deep"
+  },
+  "9804058422": {
+    "name": "Subhodip Ghosh",
+    "trigger_word": "subhodip"
+  },
+  "6290267925": {
+    "name": "The Bunip Mal",
+    "trigger_word": "bunip"
+  },
+  "9073838579": {
+    "name": "Soham-kun (Soham Halder)",
+    "trigger_word": "soham"
+  },
+  "9163150998": {
+    "name": "Selfie Stick-kun (Rounak Roy Chowdhury)",
+    "trigger_word": "rounak"
+  },
+  "9051175615": {
+    "name": "Rahemin-san(WËÉNDER)",
+    "trigger_word": "rahemin"
+  },
+  "9239471875": {
+    "name": "Prapti🦋 (Prapti Mukherjee)",
+    "trigger_word": "prapti"
+  },
+  "9392518706": {
+    "name": "Vizz",
+    "trigger_word": "vizz"
+  },
+  "9093897325": {
+    "name": "SaNjiB بالا(HBO)",
+    "trigger_word": "sanjib"
+  },
+  "8240799075": {
+    "name": "Aniket PU",
+    "trigger_word": "aniket"
+  },
+  "8337068121": {
+    "name": "Rajashree",
+    "trigger_word": "rajashree"
+  },
+  "8697081911": {
+    "name": "Mousumi Sil (The Lebu Gal)",
+    "trigger_word": "lebugal"
+  },
+  "8917752531": {
+    "name": "NonStopBull PU",
+    "trigger_word": "nonstop"
+  },
+  "9007616275": {
+    "name": "Vai Vai(U Know The Rest)",
+    "trigger_word": "vaivai"
+  },
+  "9073830534": {
+    "name": "Madara R Jhaat Er Chul",
+    "trigger_word": "madara"
+  },
+  "7099164052": {
+    "name": "Op Ricky Gamer",
+    "trigger_word": "ricky"
+  },
+  "9007152024": {
+    "name": "Souparno (PU)",
+    "trigger_word": "souparno"
+  },
+  "9143610542": {
+    "name": "IDK HOW BUT HE HAS MY INFO",
+    "trigger_word": "idkhow"
+  },
+  "8972255034": {
+    "name": "S R E Y A J ! T( T_T ) - (HBO)",
+    "trigger_word": "sreyajit"
+  },
+  "7596911784": {
+    "name": "Aaishik Chatterjee",
+    "trigger_word": "aaishik"
+  },
+  "8017448401": {
+    "name": "Dipmallo(PU)",
+    "trigger_word": "dipmallo"
+  },
+  "9692695020": {
+    "name": "Subhankar PU",
+    "trigger_word": "subhankar"
+  },
+  "8777035859": {
+    "name": "Shourya Rai",
+    "trigger_word": "srrai"
   }
+}
