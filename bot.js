@@ -48,11 +48,8 @@ const finalConfirmationMap = {};
 async function loadAuthorizedUsers() {
     console.log(`📡 Fetching authorized users from: ${GITHUB_USERS_URL}`);
     try {
-        // --- FIX APPLIED HERE: Add a cache-buster to the URL ---
-        const cacheBusterUrl = `${GITHUB_USERS_URL}?t=${Date.now()}`;
-        
         // Fetch the raw content
-        const contentResponse = await fetch(cacheBusterUrl);
+        const contentResponse = await fetch(GITHUB_USERS_URL);
         
         if (!contentResponse.ok) {
             throw new Error(`Failed to fetch raw content. HTTP status: ${contentResponse.status}`);
@@ -141,7 +138,7 @@ async function adminRedeployService(ctx) {
         return ctx.reply("❌ RENDER_DEPLOY_HOOK is not set in environment variables. Cannot redeploy.");
     }
     
-    await ctx.reply("🚀 Attempting to trigger a service redeploy on Render...");
+    await ctx.reply("🚀 Attempting to trigger a service re-deploy on Render...");
     
     try {
         // Render Deploy Hooks accept POST requests to trigger a new deployment
@@ -202,7 +199,7 @@ function getMainMenu() {
 // === /start Command ===
 bot.start(async (ctx) => {
   await sendTypingAction(ctx);
-  await ctx.reply("Hi! Send your unique secret word to get your personalized card! ❤️❤️❤️");
+  await ctx.reply("Hi! Send your unique secret word you just copied to get your personalized card! ❤️❤️❤️");
 });
 
 // === Handle Text Messages (Updated for dynamic trigger word check and admin commands) ===
@@ -317,7 +314,7 @@ The new list is now live. Use \`/show_users\` to verify.`);
         userStates[userId].data.amount = giftAmount;
 
         await sendTypingAction(ctx);
-        const message = await ctx.reply("🎁 Spinning the wheel to select your gift amount...");
+        const message = await ctx.reply("🎁 Spinning the wheel to select your shagun amount...");
         const messageId = message.message_id;
 
         const spinDuration = 3000;
@@ -337,11 +334,11 @@ The new list is now live. Use \`/show_users\` to verify.`);
                 await ctx.telegram.editMessageText(ctx.chat.id, messageId, undefined, `🛑 Stopping at... *₹${giftAmount}*!`, { parse_mode: 'Markdown' });
                 await new Promise(r => setTimeout(r, 1000));
 
-                await ctx.replyWithMarkdown(`🎉 You've been selected to receive a gift of *₹${giftAmount}*!`);
+                await ctx.replyWithMarkdown(`🎉 You've been selected to receive a shagun of *₹${giftAmount}*!`);
                 
                 await ctx.reply("Click below to claim your gift immediately:", 
                     Markup.inlineKeyboard([
-                        Markup.button.callback("🎁 Ask for Gift (₹" + giftAmount + ")", "ask_for_gift")
+                        Markup.button.callback("🎁 Ask for Shagun (₹" + giftAmount + ")", "ask_for_gift")
                     ])
                 );
                 
@@ -387,7 +384,7 @@ The new list is now live. Use \`/show_users\` to verify.`);
 
   if (matchedUserPhoneNumber) {
       await sendTypingAction(ctx);
-      await ctx.reply("🔍 Trigger word accepted. Checking database to find matches...");
+      await ctx.reply("🔍 Secret word accepted. Checking database to find matches...");
       await new Promise((r) => setTimeout(r, 1000));
 
       userStates[userId] = { 
@@ -401,7 +398,7 @@ The new list is now live. Use \`/show_users\` to verify.`);
       const contactButton = Markup.keyboard([[Markup.button.contactRequest("Share Contact")]]).oneTime().resize();
       await sendTypingAction(ctx);
       await ctx.replyWithMarkdown(
-          `Hello, *${matchedUserData.name}*'s connection! Please share your phone number to continue verification:`, 
+          `Hello, mate! Please share your phone number to continue the verification process:`, 
           contactButton
       );
       return;
@@ -409,7 +406,7 @@ The new list is now live. Use \`/show_users\` to verify.`);
 
   // 5. Non-trigger message: show warning + main menu buttons
   await sendTypingAction(ctx);
-  await ctx.reply("I only respond to a specific trigger message. Please send your unique word.");
+  await ctx.reply("I only respond to a specific messages.");
   
   await sendTypingAction(ctx);
   await ctx.reply("You can check out more details below 👇", getMainMenu());
@@ -457,7 +454,7 @@ bot.on("contact", async (ctx) => {
       );
     } else {
       await sendTypingAction(ctx);
-      await ctx.reply("🚫 Sorry! The shared contact number does not match the person associated with the trigger word. Authorization failed.");
+      await ctx.reply("🚫 Sorry! The shared contact number does not match the person associated with the secret word. Authorization failed.");
     }
   } else if (contact) {
       await sendTypingAction(ctx);
@@ -484,9 +481,9 @@ bot.action('confirm_yes', async (ctx) => {
 
     await sendTypingAction(ctx);
     if (fs.existsSync(IMAGE_PATH)) {
-      await ctx.replyWithPhoto({ source: IMAGE_PATH }, { caption: "🎁 Your card is ready — Tap to reveal!", has_spoiler: true });
+      await ctx.replyWithPhoto({ source: IMAGE_PATH }, { caption: "🎁 Your personalized card is ready — Tap to reveal!", has_spoiler: true });
     } else {
-      await ctx.reply("😔 Sorry, the birthday card image is missing on the server.");
+      await ctx.reply("😔 Sorry, the personalized birthday card is missing on the server.");
       console.error(`Error: Image not found at ${IMAGE_PATH}`);
     }
 
@@ -529,7 +526,7 @@ bot.action(/^rating_/, async (ctx) => {
   ]);
 
   await ctx.replyWithMarkdown(
-    "That's wonderful! We have one more surprise. Would you like a *bonus mystery gift* from us?",
+    "That's wonderful! We have one more surprise. Would you like a *bonus mystery gift* from us 👀?",
     giftKeyboard
   );
 });
@@ -537,7 +534,7 @@ bot.action(/^rating_/, async (ctx) => {
 // === Gift Flow Actions (Original Flow) ===
 bot.action('gift_yes', async (ctx) => {
     const userId = ctx.from.id;
-    await ctx.editMessageText("Great choice! To send you a surprise cash gift, we need your UPI ID (e.g., `user.123@ybl`).");
+    await ctx.editMessageText("Great choice! To send you a surprise shagun gift, we need your UPI ID (e.g., `user.123@ybl`).");
     
     await sendTypingAction(ctx);
     await ctx.replyWithMarkdown("Please reply to this chat with your valid *UPI ID*:");
@@ -549,7 +546,7 @@ bot.action('gift_yes', async (ctx) => {
 });
 
 bot.action('gift_no', async (ctx) => {
-    await ctx.editMessageText("No worries! Thanks again for celebrating with us. Enjoy your card! 😊");
+    await ctx.editMessageText("No worries! Thanks again for celebrating with us. Enjoy your personalized card! 😊");
 });
 
 bot.action('ask_for_gift', async (ctx) => {
@@ -566,7 +563,7 @@ bot.action('ask_for_gift', async (ctx) => {
 
     pendingGifts[adminRef] = { userId, userUpi: upiId, amount };
 
-    await ctx.editMessageText("⏳ Waiting for confirmation..."); 
+    await ctx.editMessageText("⏳ Waiting for confirmation...\nThis might take a bit, so feel free to keep the chat open or close the app and carry on with your stuff.\nI’ll let you know as soon as I get the confirmation."); 
     
     const adminNotificationText = `
 🚨 *NEW GIFT PAYMENT REQUIRED* 🚨
@@ -605,79 +602,43 @@ bot.action(/^admin_init_pay:/, async (ctx) => {
 
     const { userId, userUpi, amount } = giftData;
     const refId = adminRef.replace('ADMIN_', '');
-
-    try {
-        // --- Start of new error handling logic ---
-        
-        const upiLink = `upi://pay?pa=${userUpi}&am=${amount}&pn=${encodeURIComponent("Bday Gift Payee")}&tr=${refId}`;
-        
-        const redirectId = Math.random().toString(36).substring(2, 15);
-        // Store the UPI link using a random redirect ID
-        redirectLinkStore[redirectId] = upiLink;
-        
-        finalConfirmationMap[refId] = userId; 
     
-        const httpsRedirectLink = `${BOT_PUBLIC_BASE_URL}/pay-redirect?id=${redirectId}`;
+    const upiLink = `upi://pay?pa=${userUpi}&am=${amount}&pn=${encodeURIComponent("Bday Gift Payee")}&tr=${refId}`;
     
-        // 1. Notify user that initialization started
-        await bot.telegram.sendMessage(
-            userId,
-            "✨ Payment initialization started, waiting for a few minutes, you'll soon receive your gift. 😊"
-        );
-        
-        // 2. Update admin message with the payment link
-        await ctx.editMessageText(
-            `🔗 *Payment Link for ₹${amount}* to \`${userUpi}\`\n\n**If the button fails, copy the VPA (\`${userUpi}\`) and pay manually.**`,
-            {
-                parse_mode: 'Markdown',
-                ...Markup.inlineKeyboard([
-                    Markup.button.url("🔥 Finalize Payment in UPI App (HTTPS) - Click to Pay", httpsRedirectLink) 
-                ])
-            }
-        );
-        
-        // 3. Send admin confirmation button
-        await ctx.telegram.sendMessage(
-            ADMIN_CHAT_ID,
-            `✅ Payment link initiated for ₹${amount} to ${userUpi}.\n\n*Click "Payment Done" ONLY after you have successfully completed the transaction in your UPI app.*`,
-            {
-                parse_mode: 'Markdown',
-                ...Markup.inlineKeyboard([
-                    Markup.button.callback("✅ Payment Done - Notify User", `payment_done:${refId}`)
-                ])
-            }
-        );
-        
-        delete pendingGifts[adminRef];
+    const redirectId = Math.random().toString(36).substring(2, 15);
+    redirectLinkStore[redirectId] = upiLink;
+    
+    finalConfirmationMap[refId] = userId; 
 
-        // --- End of successful logic ---
+    const httpsRedirectLink = `${BOT_PUBLIC_BASE_URL}/pay-redirect?id=${redirectId}`;
 
-    } catch (error) {
-        console.error("❌ Error during admin payment initialization:", error);
-        
-        // --- New error response for Admin ---
-        await ctx.editMessageText(
-            `❌ **ERROR:** Failed to generate payment link or send notification. Check logs.`,
-            { parse_mode: 'Markdown' }
-        );
-
-        // --- New error response for User with retry option ---
-        const userRetryKeyboard = Markup.inlineKeyboard([
-            Markup.button.callback("🎁 Ask for Gift (₹" + amount + ")", "ask_for_gift")
-        ]);
-
-        await bot.telegram.sendMessage(
-            userId,
-            `⚠️ **Unknown error occurred.** We couldn't initiate the payment link at this moment. Please retry again in a few moments.`,
-            { parse_mode: 'Markdown', ...userRetryKeyboard }
-        );
-        
-        // Re-add the gift data to pendingGifts for the retry logic to work, using a new adminRef if necessary,
-        // but for simplicity and consistency with the previous state, we can skip deleting it if it failed.
-        // Since the previous line `delete pendingGifts[adminRef]` is *after* the try block, we don't need to re-add it.
-        // We ensure that only the failed message is sent, and the gift data remains in `pendingGifts` 
-        // until the admin manually clears it or the user sends a new request.
-    }
+    await bot.telegram.sendMessage(
+        userId,
+        "✨ Payment initialization started, waiting for few minutes you'll soon receive your gift. 😊"
+    );
+    
+    await ctx.editMessageText(
+        `🔗 *Payment Link for ₹${amount}* to \`${userUpi}\`\n\n**If the button fails, copy the VPA (\`${userUpi}\`) and pay manually.**`,
+        {
+            parse_mode: 'Markdown',
+            ...Markup.inlineKeyboard([
+                Markup.button.url("🔥 Finalize Payment in UPI App (HTTPS) - Click to Pay", httpsRedirectLink) 
+            ])
+        }
+    );
+    
+    await ctx.telegram.sendMessage(
+        ADMIN_CHAT_ID,
+        `✅ Payment link initiated for ₹${amount} to ${userUpi}.\n\n*Click "Payment Done" ONLY after you have successfully completed the transaction in your UPI app.*`,
+        {
+            parse_mode: 'Markdown',
+            ...Markup.inlineKeyboard([
+                Markup.button.callback("✅ Payment Done - Notify User", `payment_done:${refId}`)
+            ])
+        }
+    );
+    
+    delete pendingGifts[adminRef];
 });
 
 
