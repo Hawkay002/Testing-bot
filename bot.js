@@ -44,6 +44,11 @@ const pendingGifts = {};
 const redirectLinkStore = {}; 
 const finalConfirmationMap = {};
 
+// NEW: Global state for the multi-step deletion command
+// user_id -> { state: "awaiting_deletion_choice", matches: { 1: { phone: "...", data: {...} }, ... } }
+const deletionStates = {};
+
+
 // === Function to load user data from GitHub (and get SHA for future updates) ===
 async function loadAuthorizedUsers() {
     console.log(`📡 Fetching authorized users from: ${GITHUB_USERS_URL}`);
@@ -84,7 +89,7 @@ async function loadAuthorizedUsers() {
 }
 
 // === Function to update the file content on GitHub ===
-async function updateAuthorizedUsersOnGithub(newContent, committerName, committerEmail) {
+async function updateAuthorizedUsersOnGithub(newContent, committerName, committerEmail, commitMessage) {
     if (!GITHUB_TOKEN) {
         throw new Error("GITHUB_TOKEN environment variable is not set.");
     }
@@ -98,7 +103,7 @@ async function updateAuthorizedUsersOnGithub(newContent, committerName, committe
     const apiUrl = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${GITHUB_FILE_PATH}`;
 
     const payload = {
-        message: `feat(bot): Add new user via Telegram for ${newContent[Object.keys(newContent).pop()].name}`,
+        message: commitMessage, // Use the provided dynamic commit message
         content: contentEncoded,
         sha: GITHUB_FILE_SHA, // Must provide the current SHA for the update to work
         committer: {
@@ -202,6 +207,52 @@ bot.start(async (ctx) => {
   await ctx.reply("Hi! Send your unique secret word you just copied to get your personalized card! ❤️❤️❤️");
 });
 
+// === Handle Deletion Action ===
+bot.action(/^admin_delete:/, async (ctx) => {
+    const userId = ctx.from.id;
+    if (userId !== ADMIN_CHAT_ID) {
+        return ctx.reply("🚫 You are not authorized to perform this admin action.");
+    }
+    
+    const phoneToDelete = ctx.match.input.split(':')[1];
+    
+    // Clear the message to show processing
+    await ctx.editMessageText(`⏳ Attempting to delete user with phone number: \`${phoneToDelete}\`...`);
+    
+    if (!AUTHORIZED_USERS_MAP[phoneToDelete]) {
+        return ctx.editMessageText(`❌ Error: User with phone number \`${phoneToDelete}\` not found in the current list.`, { parse_mode: 'Markdown' });
+    }
+
+    const userName = AUTHORIZED_USERS_MAP[phoneToDelete].name;
+    
+    try {
+        // 1. Prepare new data structure (delete the property)
+        const newAuthorizedUsers = { ...AUTHORIZED_USERS_MAP };
+        delete newAuthorizedUsers[phoneToDelete];
+        
+        // 2. Update the file on GitHub
+        // Use a generic committer email if admin doesn't have a username
+        const committerEmail = ctx.from.username ? `${ctx.from.username}@telegram.org` : 'admin@telegram.org';
+        const commitMessage = `feat(bot): Remove user ${userName} (${phoneToDelete}) via Telegram`;
+
+        await updateAuthorizedUsersOnGithub(newAuthorizedUsers, ctx.from.first_name, committerEmail, commitMessage);
+        
+        // 3. Update the local map immediately
+        AUTHORIZED_USERS_MAP = newAuthorizedUsers;
+        
+        // 4. Clean up state
+        if (deletionStates[userId]) {
+            delete deletionStates[userId];
+        }
+
+        await ctx.editMessageText(`✅ User **${userName}** (\`${phoneToDelete}\`) successfully removed from the authorized list and committed to GitHub!`, { parse_mode: 'Markdown' });
+        
+    } catch (error) {
+        console.error("GitHub Deletion Error:", error);
+        await ctx.editMessageText(`❌ Failed to remove user **${userName}**: ${error.message}. Please check logs and GitHub status.`, { parse_mode: 'Markdown' });
+    }
+});
+
 // === Handle Text Messages (Updated for dynamic trigger word check and admin commands) ===
 bot.on("text", async (ctx) => {
   const userId = ctx.from.id;
@@ -276,8 +327,11 @@ bot.on("text", async (ctx) => {
                       trigger_word: triggerWord.toLowerCase() 
                   };
                   
+                  const committerEmail = ctx.from.username ? `${ctx.from.username}@telegram.org` : 'admin@telegram.org';
+                  const commitMessage = `feat(bot): Add new user via Telegram for ${name}`;
+
                   // 2. Update the file on GitHub
-                  await updateAuthorizedUsersOnGithub(newAuthorizedUsers, ctx.from.first_name, ctx.from.username ? `${ctx.from.username}@telegram.org` : 'admin@telegram.org');
+                  await updateAuthorizedUsersOnGithub(newAuthorizedUsers, ctx.from.first_name, committerEmail, commitMessage);
                   
                   // 3. Update the local map immediately
                   AUTHORIZED_USERS_MAP = newAuthorizedUsers;
@@ -295,6 +349,57 @@ The new list is now live. Use \`/show_users\` to verify.`);
           } else {
               return ctx.replyWithMarkdown("❌ Invalid command format. Use: `/add_user <10-digit phone>, <Full Name>, <unique_trigger>`");
           }
+      }
+
+      // --- NEW ADMIN COMMAND: /remove ---
+      if (lowerText.startsWith('/remove')) {
+          await sendTypingAction(ctx);
+          const query = text.slice('/remove'.length).trim();
+          
+          if (!query) {
+              return ctx.replyWithMarkdown("❌ Invalid command format. Use: `/remove <10-digit phone/partial name>`");
+          }
+
+          // 1. Search for matches (case-insensitive for name, partial match for phone)
+          const matches = Object.entries(AUTHORIZED_USERS_MAP)
+              .filter(([phone, data]) => 
+                  phone.includes(query) || data.name.toLowerCase().includes(query.toLowerCase())
+              );
+              
+          if (matches.length === 0) {
+              return ctx.replyWithMarkdown(`🔍 No users found matching: **\`${query}\`**`);
+          }
+
+          // 2. Prepare the list and keyboard for confirmation
+          let matchText = `🔍 Found *${matches.length}* user(s) matching **\`${query}\`**:\n\n`;
+          let keyboardButtons = [];
+          const currentMatches = {}; // Temporary map to hold the matches for state tracking
+
+          matches.forEach(([phone, data], index) => {
+              const matchId = index + 1;
+              const formattedName = data.name.replace(/([_*`[\]()])/g, '\\$1'); // Escape markdown
+              
+              matchText += `${matchId}. Name: *${formattedName}*\n   Phone: \`${phone}\`\n   Trigger: \`${data.trigger_word}\`\n\n`;
+              
+              // Button action uses the phone number for direct deletion
+              keyboardButtons.push(Markup.button.callback(`Remove ${matchId} (${data.name})`, `admin_delete:${phone}`)); 
+              
+              currentMatches[matchId] = { phone, data };
+          });
+          
+          // 3. Store the state and send the confirmation message
+          // deletionStates[userId] = { state: "awaiting_deletion_choice", matches: currentMatches }; 
+          // Note: We don't strictly need to store 'matches' here since the button already contains the phone number.
+
+          // Split buttons into rows of 1 for better display on mobile
+          const rows = keyboardButtons.map(btn => [btn]);
+          
+          await ctx.replyWithMarkdown(
+              matchText + "⚠️ *Select a user to permanently remove them from the authorized list. This action is irreversible.*", 
+              Markup.inlineKeyboard(rows)
+          );
+          
+          return;
       }
   }
 
