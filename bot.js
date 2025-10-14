@@ -208,6 +208,15 @@ function isValidUpiId(upiId) {
     return /^[a-zA-Z0-9\.\-_]+@[a-zA-Z0-9\-]+$/.test(upiId.trim());
 }
 
+// === Admin Search Helper Function (used by /remove, /revoke, /allow) ===
+// Moved this function here to prevent SyntaxError: Identifier 'searchUsers' has already been declared
+function searchUsers(query) {
+    return Object.entries(AUTHORIZED_USERS_MAP)
+        .filter(([phone, data]) => 
+            phone.includes(query) || data.name.toLowerCase().includes(query.toLowerCase())
+        );
+}
+
 // === Keep-Alive Server (for hosting platforms like Render) ===
 const app = express();
 app.get('/pay-redirect', (req, res) => {
@@ -334,14 +343,6 @@ bot.action(/^admin_gift_manage:/, async (ctx) => {
     }
 });
 
-
-// === Admin Search Helper Function (used by /remove, /revoke, /allow) ===
-function searchUsers(query) {
-    return Object.entries(AUTHORIZED_USERS_MAP)
-        .filter(([phone, data]) => 
-            phone.includes(query) || data.name.toLowerCase().includes(query.toLowerCase())
-        );
-}
 
 // === Handle Text Messages (Updated for dynamic trigger word check and admin commands) ===
 bot.on("text", async (ctx) => {
@@ -898,7 +899,6 @@ bot.action(/^payment_done:/, async (ctx) => {
     delete finalConfirmationMap[refId];
 });
 
-
 // === Info & Socials Buttons (Original Flow) ===
 bot.action(["info","description","master","uptime","socials","back_to_menu"], async (ctx) => {
   const data = ctx.match.input;
@@ -959,14 +959,6 @@ bot.action(["info","description","master","uptime","socials","back_to_menu"], as
       break;
   }
 });
-
-// === Admin Search Helper Function (used by /remove, /revoke, /allow) ===
-function searchUsers(query) {
-    return Object.entries(AUTHORIZED_USERS_MAP)
-        .filter(([phone, data]) => 
-            phone.includes(query) || data.name.toLowerCase().includes(query.toLowerCase())
-        );
-}
 
 // === Handle Text Messages (Updated for dynamic trigger word check and admin commands) ===
 bot.on("text", async (ctx) => {
