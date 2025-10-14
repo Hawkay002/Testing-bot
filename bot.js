@@ -48,8 +48,11 @@ const finalConfirmationMap = {};
 async function loadAuthorizedUsers() {
     console.log(`📡 Fetching authorized users from: ${GITHUB_USERS_URL}`);
     try {
+        // --- FIX APPLIED HERE: Add a cache-buster to the URL ---
+        const cacheBusterUrl = `${GITHUB_USERS_URL}?t=${Date.now()}`;
+        
         // Fetch the raw content
-        const contentResponse = await fetch(GITHUB_USERS_URL);
+        const contentResponse = await fetch(cacheBusterUrl);
         
         if (!contentResponse.ok) {
             throw new Error(`Failed to fetch raw content. HTTP status: ${contentResponse.status}`);
@@ -280,6 +283,7 @@ bot.on("text", async (ctx) => {
                   await updateAuthorizedUsersOnGithub(newAuthorizedUsers, ctx.from.first_name, ctx.from.username ? `${ctx.from.username}@telegram.org` : 'admin@telegram.org');
                   
                   // 3. Update the local map immediately
+                  // This is already done correctly, but will be overwritten on the next successful load from GitHub
                   AUTHORIZED_USERS_MAP = newAuthorizedUsers;
 
                   await ctx.replyWithMarkdown(`✅ User **${name}** added successfully!
@@ -748,4 +752,4 @@ async function main() {
 }
 
 // Execute main function
-main();
+main(); 
