@@ -377,8 +377,8 @@ bot.on("text", async (ctx) => {
           return adminRedeployService(ctx);
       }
 
-      // --- ADMIN COMMAND: /show_users ---
-      if (lowerText === '/show_users') {
+      // --- ADMIN COMMAND: /show (formerly /show_users) ---
+      if (lowerText === '/show') {
           await sendTypingAction(ctx);
           if (Object.keys(AUTHORIZED_USERS_MAP).length === 0) {
               return ctx.reply("The authorized user list is currently empty.");
@@ -406,10 +406,11 @@ bot.on("text", async (ctx) => {
           return;
       }
 
-      // --- ADMIN COMMAND: /add_user ---
-      if (lowerText.startsWith('/add_user')) {
+      // --- ADMIN COMMAND: /add (formerly /add_user) ---
+      if (lowerText.startsWith('/add')) {
           await sendTypingAction(ctx);
-          const parts = text.slice('/add_user'.length).trim().split(',').map(p => p.trim());
+          // Use '/add'.length instead of hardcoding 4
+          const parts = text.slice('/add'.length).trim().split(',').map(p => p.trim());
           
           if (parts.length === 3) {
               const [phoneNumber, name, triggerWord] = parts;
@@ -445,7 +446,7 @@ bot.on("text", async (ctx) => {
                   await ctx.replyWithMarkdown(`✅ User **${name}** added successfully!
 Phone: \`${phoneNumber}\`
 Trigger: \`${triggerWord}\`
-The new list is now live. Use \`/show_users\` to verify.`);
+The new list is now live. Use \`/show\` to verify.`);
                   
               } catch (error) {
                   console.error(error);
@@ -453,7 +454,7 @@ The new list is now live. Use \`/show_users\` to verify.`);
               }
               return;
           } else {
-              return ctx.replyWithMarkdown("❌ Invalid command format. Use: `/add_user <10-digit phone>, <Full Name>, <unique_trigger>`");
+              return ctx.replyWithMarkdown("❌ Invalid command format. Use: `/add <10-digit phone>, <Full Name>, <unique_trigger>`");
           }
       }
 
