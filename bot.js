@@ -25,7 +25,6 @@ const RENDER_DEPLOY_HOOK = process.env.RENDER_DEPLOY_HOOK;
 const IMAGE_PATH = "Wishing Birthday.png"; 
 
 // === REQUEST MANAGEMENT CONSTANTS ===
-const ADMIN_NOTIFICATION_TOKEN = process.env.ADMIN_NOTIFICATION_TOKEN; // Token for the bot receiving request logs
 const UPI_QR_CODE_PATH = "upi_qr_code.png"; // Placeholder path for QR code image
 const REQUEST_FEE = 50;
 
@@ -42,27 +41,12 @@ const BOT_ADMIN_VPA = "8777845713@upi";
 // === Create bot instance ===
 const bot = new Telegraf(TOKEN);
 
-// === Initialize secondary bot (if token is set) ===
-let adminNotificationBot = null;
-if (ADMIN_NOTIFICATION_TOKEN) {
-    adminNotificationBot = new Telegraf(ADMIN_NOTIFICATION_TOKEN);
-    console.log("Secondary notification bot initialized.");
-} else {
-    console.warn("⚠️ WARNING: ADMIN_NOTIFICATION_TOKEN is not set. Request logging will NOT work.");
-}
-
-
-// Global state tracking for multi-step interactions
+// === Global State Tracking ===
 // user_id -> { state: "awaiting_contact" | "awaiting_upi" | "spinning" | "awaiting_request_..." | "awaiting_decline_reason" | null, data: { ... } }
 const userStates = {}; 
 const pendingGifts = {}; 
 const redirectLinkStore = {}; 
 const finalConfirmationMap = {};
-
-// Global state for the multi-step deletion command
-const deletionStates = {}; 
-// Global state for the multi-step gift management command
-const giftManagementStates = {};
 
 // Store pending custom requests for admin processing
 // refId -> { userId, name, phone, trigger, date, refundUpi, cardImageId, cardImageMime, cardImageCaption, paymentScreenshotId, paymentScreenshotMime }
@@ -297,11 +281,6 @@ bot.action(/^admin_delete:/, async (ctx) => {
         // 3. Update the local map immediately
         AUTHORIZED_USERS_MAP = newAuthorizedUsers;
         
-        // 4. Clean up state
-        if (deletionStates[userId]) {
-            delete deletionStates[userId];
-        }
-
         await ctx.editMessageText(`✅ User **${userName}** (\`${phoneToDelete}\`) successfully removed from the authorized list and committed to GitHub!`, { parse_mode: 'Markdown' });
         
     } catch (error) {
@@ -348,11 +327,6 @@ bot.action(/^admin_gift_manage:/, async (ctx) => {
         // 3. Update the local map immediately
         AUTHORIZED_USERS_MAP = newAuthorizedUsers;
         
-        // 4. Clean up state
-        if (giftManagementStates[userId]) {
-            delete giftManagementStates[userId];
-        }
-
         await ctx.editMessageText(`✅ Gift eligibility for **${userName}** (\`${phone}\`) has been **${statusText.toUpperCase()}** and committed to GitHub!`, { parse_mode: 'Markdown' });
         
     } catch (error) {
@@ -440,20 +414,28 @@ bot.action(/^admin_decline_init:/, async (ctx) => {
     );
 });
 
-// === NEW ADMIN ACTION: Decline Request - Finalization ===
+// === NEW ADMIN ACTION: Decline Request - Finalization (from button or text) ===
 bot.action(/^admin_decline_final:/, async (ctx) => {
     const adminId = ctx.from.id;
     if (adminId !== ADMIN_CHAT_ID) {
         return ctx.reply("🚫 You are not authorized to perform this admin action.");
     }
 
-    const [refId, reasonText] = ctx.match.input.split(':').slice(1);
-    const reason = reasonText === 'no_comment' ? null : reasonText;
+    // Input format: admin_decline_final:<refId>:<reasonText/no_comment>
+    const parts = ctx.match.input.split(':').slice(1);
+    const refId = parts[0];
+    const reason = parts[1] === 'no_comment' ? null : parts.slice(1).join(':').replace(/%20/g, ' '); // Handle multi-word reason
     
     const requestData = pendingRequests[refId];
 
     if (!requestData) {
-        return ctx.editMessageText(`❌ Error: Request ID \`${refId}\` not found or expired.`, { parse_mode: 'Markdown' });
+        // If coming from a text reply, ctx.editMessageText might fail if the original message was deleted/old
+        if (ctx.callbackQuery) {
+            await ctx.editMessageText(`❌ Error: Request ID \`${refId}\` not found or expired.`, { parse_mode: 'Markdown' });
+        } else {
+            await ctx.reply(`❌ Error: Request ID \`${refId}\` not found or expired.`);
+        }
+        return;
     }
     
     let userMessage;
@@ -476,8 +458,14 @@ Your payment of ₹${REQUEST_FEE} will be refunded to your provided UPI ID (\`${
          console.error(`Error notifying user ${requestData.userId} of decline:`, error.message);
          await ctx.reply(`❌ Failed to send decline message to user ${requestData.userId}. They may have blocked the bot.`);
     }
+    
+    const adminReplyText = `✅ Request ${refId} successfully declined. User notified and refund process initiated for \`${requestData.refundUpi}\`.`;
 
-    await ctx.editMessageText(`✅ Request ${refId} successfully declined. User notified and refund process initiated for \`${requestData.refundUpi}\`.`, { parse_mode: 'Markdown' });
+    if (ctx.callbackQuery) {
+        await ctx.editMessageText(adminReplyText, { parse_mode: 'Markdown' });
+    } else {
+         await ctx.reply(adminReplyText, { parse_mode: 'Markdown' });
+    }
 
     delete userStates[adminId]; // Clear admin state
     delete pendingRequests[refId]; // Remove request from pending list
@@ -555,7 +543,7 @@ bot.on(['photo', 'document'], async (ctx) => {
         const committerEmail = ctx.from.username ? `${ctx.from.username}@telegram.org` : 'admin@telegram.org';
         const refId = `REQ${Date.now()}`;
         
-        // Store request globally for admin actions
+        // 1. Store request globally for admin actions (MANDATORY)
         pendingRequests[refId] = {
             userId: userId,
             name: requestData.name,
@@ -579,9 +567,6 @@ Phone: \`${requestData.phone}\`
 Date Needed: \`${requestData.date}\`
 Trigger Word: \`${requestData.trigger}\`
 Refund UPI: \`${requestData.refundUpi}\`
-Card Image ID: \`${requestData.cardImageId}\`
-Screenshot ID: \`${requestData.paymentScreenshotId}\`
-Commencing: \`${ctx.from.first_name}\` (\`${committerEmail}\`)
         `;
         
         const adminKeyboard = Markup.inlineKeyboard([
@@ -589,41 +574,26 @@ Commencing: \`${ctx.from.first_name}\` (\`${committerEmail}\`)
             [Markup.button.callback("❌ Decline Request", `admin_decline_init:${refId}`)],
         ]);
         
-        // 1. Send text notification and action buttons to main admin chat
+        // 2. Send text notification and action buttons to main admin chat
         await ctx.telegram.sendMessage(ADMIN_CHAT_ID, notificationText, { parse_mode: 'Markdown', ...adminKeyboard });
         
-        // 2. Send files to the separate notification bot (if configured)
-        if (adminNotificationBot) {
-            try {
-                const detailedLog = `
-🚨 **CUSTOM REQUEST FILES & DATA** 🚨
-Ref ID: \`${refId}\`
-User: ${requestData.name} (ID: ${userId})
+        // 3. Send files to the admin chat (since there is no secondary bot)
+        await ctx.telegram.sendMessage(ADMIN_CHAT_ID, `**[REQ ${refId}] FILES FOR REVIEW:**\n\n1. **Card Image** (Attached below)\n2. **Payment Proof** (Attached below)`, { parse_mode: 'Markdown' });
+        
+        // Send Card Image
+        try {
+            await ctx.telegram.sendPhoto(ADMIN_CHAT_ID, requestData.cardImageId, { caption: `Card Image for ${requestData.name} (Ref ID: ${refId})` });
+        } catch (e) {
+             console.error(`Error sending Card Image to Admin: ${e.message}`);
+             await ctx.telegram.sendMessage(ADMIN_CHAT_ID, `⚠️ Failed to send Card Image for ${refId}. File ID: \`${requestData.cardImageId}\``);
+        }
 
-**--- Card Image Data ---**
-File ID: \`${requestData.cardImageId}\`
-Caption: ${requestData.cardImageCaption}
-
-**--- Payment Screenshot Data ---**
-File ID: \`${requestData.paymentScreenshotId}\`
-`;
-                await adminNotificationBot.telegram.sendMessage(ADMIN_CHAT_ID, detailedLog, { parse_mode: 'Markdown' });
-                
-                // Attempt to send files via URL (using the main bot's token)
-                const requestImageLink = `https://api.telegram.org/bot${TOKEN}/getFile?file_id=${requestData.cardImageId}`;
-                const paymentScreenshotLink = `https://api.telegram.org/bot${TOKEN}/getFile?file_id=${requestData.paymentScreenshotId}`;
-
-                await adminNotificationBot.telegram.sendMessage(ADMIN_CHAT_ID, "**[REQ " + refId + "] REVIEW - Card Image:**", { parse_mode: 'Markdown' });
-                await adminNotificationBot.telegram.sendPhoto(ADMIN_CHAT_ID, requestImageLink);
-                
-                await adminNotificationBot.telegram.sendMessage(ADMIN_CHAT_ID, "**[REQ " + refId + "] REVIEW - Payment Proof:**", { parse_mode: 'Markdown' });
-                await adminNotificationBot.telegram.sendPhoto(ADMIN_CHAT_ID, paymentScreenshotLink);
-
-            } catch (error) {
-                console.error("❌ Secondary bot notification failed (Text Log):", error.message);
-                // Send failure notification to main admin chat
-                await ctx.telegram.sendMessage(ADMIN_CHAT_ID, `⚠️ Error logging request files to secondary bot for ${refId}: ${error.message}. Please check the main admin chat for the button.`);
-            }
+        // Send Payment Screenshot
+        try {
+            await ctx.telegram.sendPhoto(ADMIN_CHAT_ID, requestData.paymentScreenshotId, { caption: `Payment Proof for ${requestData.name} (Ref ID: ${refId})` });
+        } catch (e) {
+             console.error(`Error sending Payment Screenshot to Admin: ${e.message}`);
+             await ctx.telegram.sendMessage(ADMIN_CHAT_ID, `⚠️ Failed to send Payment Screenshot for ${refId}. File ID: \`${requestData.paymentScreenshotId}\``);
         }
         
         delete userStates[userId]; // Clear state after submission
@@ -722,7 +692,7 @@ bot.on("text", async (ctx) => {
               from: ctx.from,
               message: ctx.message,
               chat_instance: 'some_instance',
-              data: `admin_decline_final:${refId}:${text}`
+              data: `admin_decline_final:${refId}:${encodeURIComponent(text)}`
           }
       });
   }
