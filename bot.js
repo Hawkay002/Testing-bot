@@ -656,7 +656,7 @@ bot.action(/^payment_done:/, async (ctx) => {
 
     await bot.telegram.sendMessage(
         targetUserId,
-        "🎉 **Payment successful!** Please check your bank account or UPI application for the surprise gift. We hope you enjoyed your birthday surprise! ❤️",
+        "🎉 **Shagun has been sent successfully!** Please check your bank account or UPI application. We hope you enjoyed your birthday surprise! ❤️",
         { parse_mode: 'Markdown' }
     );
     
