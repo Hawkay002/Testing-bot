@@ -492,25 +492,29 @@ Commencing: \`${ctx.from.first_name}\` (\`${committerEmail}\`)
         // 2. Send detailed data to the separate notification bot (if configured)
         if (adminNotificationBot) {
             try {
-                // --- FIX: Get public URL for cross-bot file access ---
-                const requestImageUrl = await bot.telegram.getFileLink(requestData.requestImageFileId);
-                const paymentScreenshotUrl = await bot.telegram.getFileLink(fileId);
-                // ---------------------------------------------------
+                // --- RELIABLE FILE SHARING: Use Forwarding ---
+                // Forward the initial image the user sent
+                await adminNotificationBot.telegram.forwardMessage(
+                    ADMIN_CHAT_ID, 
+                    userId, 
+                    ctx.message.message_id - 1 // Assume the card image was sent one message before the screenshot
+                );
 
-                // Send Request Image
-                await adminNotificationBot.telegram.sendPhoto(ADMIN_CHAT_ID, requestImageUrl.href, {
-                    caption: `[REQ ${refId}] Card Image: ${requestData.requestImageCaption || 'No Caption'}`,
-                    parse_mode: 'Markdown'
-                });
-                
-                // Send Payment Screenshot
-                await adminNotificationBot.telegram.sendPhoto(ADMIN_CHAT_ID, paymentScreenshotUrl.href, {
-                    caption: `[REQ ${refId}] Payment Screenshot - User: ${requestData.requestName}`,
-                    parse_mode: 'Markdown'
-                });
+                // Forward the payment screenshot message (the current message)
+                await adminNotificationBot.telegram.forwardMessage(
+                    ADMIN_CHAT_ID, 
+                    userId, 
+                    ctx.message.message_id
+                );
+
+                // Send a clarifying message with the user details
+                await adminNotificationBot.telegram.sendMessage(
+                    ADMIN_CHAT_ID,
+                    `**Request Details for ${refId}**\nName: ${requestData.requestName}\nPhone: ${requestData.requestPhone}\n(Forwarded Card Image followed by Payment Screenshot)`
+                );
 
             } catch (error) {
-                console.error("❌ Secondary bot notification failed (File Access/Send):", error.message);
+                console.error("❌ Secondary bot notification failed (Forwarding):", error.message);
                 // Send failure notification to main admin chat
                 await ctx.telegram.sendMessage(ADMIN_CHAT_ID, `⚠️ Error forwarding files to secondary bot for ${refId}: ${error.message}`);
             }
@@ -1230,6 +1234,17 @@ async function main() {
     if (!RENDER_DEPLOY_HOOK) {
         console.warn("⚠️ WARNING: RENDER_DEPLOY_HOOK is not set. Admin /redeploy feature will NOT work.");
     }
+
+    // Attempt to drop pending updates from the main bot to prevent 409 Conflict
+    try {
+        await bot.telegram.setWebhook(''); // Clear any webhook setting
+        await bot.telegram.getUpdates(0, 100, -1); // Consume any pending updates
+        console.log("Cleanup complete: Webhook cleared and pending updates consumed.");
+    } catch (e) {
+        // Log if cleanup fails but don't stop the bot start
+        console.warn("⚠️ Cleanup failed, proceeding with launch. Error:", e.message);
+    }
+
     // 1. Load data from the external GitHub source and get the current SHA
     await loadAuthorizedUsers();
     
