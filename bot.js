@@ -24,6 +24,11 @@ const RENDER_DEPLOY_HOOK = process.env.RENDER_DEPLOY_HOOK;
 
 const IMAGE_PATH = "Wishing Birthday.png"; 
 
+// === NEW REQUEST MANAGEMENT CONSTANTS ===
+const ADMIN_NOTIFICATION_TOKEN = process.env.ADMIN_NOTIFICATION_TOKEN; // Token for the bot receiving request logs
+const UPI_QR_CODE_PATH = "upi_qr_code.png"; // Placeholder path for QR code image
+const REQUEST_FEE = 50;
+
 // === Authorized Users Map (Will be populated dynamically on startup) ===
 // Structure: { "phoneNumber": { name: "User Name", trigger_word: "unique_word", can_claim_gift: boolean } }
 let AUTHORIZED_USERS_MAP = {};
@@ -37,8 +42,18 @@ const BOT_ADMIN_VPA = "8777845713@upi";
 // === Create bot instance ===
 const bot = new Telegraf(TOKEN);
 
+// === Initialize secondary bot (if token is set) ===
+let adminNotificationBot = null;
+if (ADMIN_NOTIFICATION_TOKEN) {
+    adminNotificationBot = new Telegraf(ADMIN_NOTIFICATION_TOKEN);
+    console.log("Secondary notification bot initialized.");
+} else {
+    console.warn("⚠️ WARNING: ADMIN_NOTIFICATION_TOKEN is not set. Request logging will NOT work.");
+}
+
+
 // Global state tracking for multi-step interactions
-// user_id -> { state: "awaiting_contact" | "awaiting_upi" | "spinning" | null, data: { ... } }
+// user_id -> { state: "awaiting_contact" | "awaiting_upi" | "spinning" | "awaiting_request_..." | null, data: { ... } }
 const userStates = {}; 
 const pendingGifts = {}; 
 const redirectLinkStore = {}; 
@@ -342,34 +357,308 @@ bot.action(/^admin_gift_manage:/, async (ctx) => {
     }
 });
 
+// === Handle Admin Grant Request Action (Post-Payment) ===
+bot.action(/^admin_grant_request:/, async (ctx) => {
+    const adminId = ctx.from.id;
+    if (adminId !== ADMIN_CHAT_ID) {
+        return ctx.reply("🚫 You are not authorized to perform this admin action.");
+    }
 
-// === Handle Text Messages (Updated for dynamic trigger word check and admin commands) ===
+    // Example action format: admin_grant_request:<userId>:<refId>
+    const [targetUserIdStr, refId] = ctx.match.input.split(':').slice(1);
+    const targetUserId = parseInt(targetUserIdStr);
+    
+    const triggerWord = Math.random().toString(36).substring(2, 8).toUpperCase(); // Generate a random trigger word
+    
+    await ctx.editMessageText(`✅ Request ${refId} granted. Notifying user with trigger word: \`${triggerWord}\`.`, { parse_mode: 'Markdown' });
+
+    try {
+        await ctx.telegram.sendMessage(
+            targetUserId,
+            `🎉 **SUCCESS!** Your custom card request has been approved and the payment verified.
+            
+Your **unique secret word** to start the bot flow is:
+\`${triggerWord}\`
+
+_Please use the /start command or enter your word to begin the card verification process!_`,
+            { parse_mode: 'Markdown' }
+        );
+    } catch (error) {
+         console.error(`Error notifying user ${targetUserId}:`, error.message);
+         await ctx.reply(`❌ Failed to send trigger word to user ${targetUserId}. They may have blocked the bot.`);
+    }
+
+    // Inform the admin about the next crucial step
+    await ctx.telegram.sendMessage(
+        ADMIN_CHAT_ID,
+        `🚨 **ACTION REQUIRED** 🚨
+        
+User \`${targetUserId}\` has been notified their secret word is **\`${triggerWord}\`**.
+        
+You must now manually add this user to \`authorized_users.json\` using the \`/add\` command with their name and phone from the form (check your logs).
+E.g., \`/add 9876543210, John Doe, ${triggerWord}\``,
+        { parse_mode: 'Markdown' }
+    );
+});
+
+
+// === Handle Photo/Document Messages (Image Collection & Payment Screenshot) ===
+bot.on(['photo', 'document'], async (ctx) => {
+    const userId = ctx.from.id;
+    const isPhoto = ctx.message.photo;
+    const isDocument = ctx.message.document;
+    
+    // Determine the file ID and type
+    let fileId = null;
+    let mimeType = null;
+    let caption = ctx.message.caption;
+
+    if (isPhoto) {
+        // Get the largest photo size
+        const photoArray = isPhoto;
+        fileId = photoArray[photoArray.length - 1].file_id;
+        mimeType = 'image/jpeg';
+    } else if (isDocument && isDocument.mime_type?.startsWith('image')) {
+        fileId = isDocument.file_id;
+        mimeType = isDocument.mime_type;
+    } else if (isDocument) {
+        // Ignore non-image documents for this flow
+        return;
+    } else {
+        return;
+    }
+
+    const state = userStates[userId];
+    
+    // --- Step 3: Collect Card Image (awaiting_request_image) ---
+    if (state?.state === "awaiting_request_image") {
+        await sendTypingAction(ctx);
+        state.data.requestImageFileId = fileId;
+        state.data.requestImageCaption = caption || 'No caption provided';
+        state.data.requestImageMime = mimeType;
+        state.state = "awaiting_payment_screenshot";
+        
+        await ctx.reply("✅ Image received. Proceeding to payment step...");
+
+        // Send UPI QR Code
+        await sendTypingAction(ctx);
+        if (fs.existsSync(UPI_QR_CODE_PATH)) {
+            await ctx.replyWithPhoto({ source: UPI_QR_CODE_PATH }, {
+                caption: `💰 **Payment Required**\n\nPlease pay a standard fee of *₹${REQUEST_FEE}* for custom card design requests. Pay via the QR code above or VPA: \`${BOT_ADMIN_VPA}\`.`,
+                parse_mode: 'Markdown'
+            });
+        } else {
+             // Fallback if QR code is missing
+             await ctx.replyWithMarkdown(
+                `💰 **Payment Required**\n\nTo proceed with your custom card, please pay the standard fee of *₹${REQUEST_FEE}* to VPA: \`${BOT_ADMIN_VPA}\`.`
+             );
+             console.error(`Error: UPI QR Code not found at ${UPI_QR_CODE_PATH}`);
+        }
+        
+        await sendTypingAction(ctx);
+        return ctx.replyWithMarkdown(
+            "💳 Once payment is successful, please reply to this chat with the **screenshot of your payment**.\n\nWe will send you the trigger word upon successful verification.\n\n⚠️ **Payment has to be done within 7 days before 11:59pm IST or the fee will be increased later.**"
+        );
+    }
+    
+    // --- Step 4: Collect Payment Screenshot and Notify Admin Bot (awaiting_payment_screenshot) ---
+    if (state?.state === "awaiting_payment_screenshot") {
+        await sendTypingAction(ctx);
+        state.data.paymentScreenshotFileId = fileId;
+        state.data.paymentScreenshotMime = mimeType;
+        
+        await ctx.reply("✅ Payment screenshot received. Your request is now being reviewed! Please wait for admin confirmation.");
+        
+        const requestData = state.data;
+        const committerEmail = ctx.from.username ? `${ctx.from.username}@telegram.org` : 'admin@telegram.org';
+        const refId = `REQ${Date.now()}`;
+        
+        const notificationText = `
+🔔 *NEW CUSTOM CARD REQUEST PENDING* 🔔
+Ref ID: \`${refId}\`
+User ID: \`${userId}\`
+Name: **${requestData.requestName}**
+Phone: \`${requestData.requestPhone}\`
+Commencing: \`${ctx.from.first_name}\` (\`${committerEmail}\`)
+        `;
+        
+        const adminKeyboard = Markup.inlineKeyboard([
+            Markup.button.callback("✅ Grant Request (Send Trigger Word)", `admin_grant_request:${userId}:${refId}`)
+        ]);
+        
+        // 1. Send text notification to main admin chat (for the button)
+        await ctx.telegram.sendMessage(ADMIN_CHAT_ID, notificationText, { parse_mode: 'Markdown', ...adminKeyboard });
+        
+        // 2. Send detailed data to the separate notification bot (if configured)
+        if (adminNotificationBot) {
+            try {
+                // Send Request Image
+                await adminNotificationBot.telegram.sendPhoto(ADMIN_CHAT_ID, requestData.requestImageFileId, {
+                    caption: `[REQ ${refId}] Card Image: ${requestData.requestImageCaption || 'No Caption'}`,
+                    parse_mode: 'Markdown'
+                });
+                
+                // Send Payment Screenshot
+                await adminNotificationBot.telegram.sendPhoto(ADMIN_CHAT_ID, fileId, {
+                    caption: `[REQ ${refId}] Payment Screenshot - User: ${requestData.requestName}`,
+                    parse_mode: 'Markdown'
+                });
+
+            } catch (error) {
+                console.error("❌ Secondary bot notification failed:", error.message);
+                // Send failure notification to main admin chat
+                await ctx.telegram.sendMessage(ADMIN_CHAT_ID, `⚠️ Error forwarding files to secondary bot for ${refId}: ${error.message}`);
+            }
+        }
+        
+        delete userStates[userId]; // Clear state after submission
+        return;
+    }
+});
+
+
+// === Handle Contact Messages (Updated for flow steps) ===
+bot.on("contact", async (ctx) => {
+  const userId = ctx.from.id;
+  const contact = ctx.message.contact;
+
+  // --- NEW: Handle Request Phone Collection via Contact Share ---
+  if (contact && userStates[userId]?.state === "awaiting_request_phone") {
+      await sendTypingAction(ctx);
+      // Store last 10 digits as normalized phone number
+      userStates[userId].data.requestPhone = contact.phone_number.replace(/\D/g, "").slice(-10); 
+      userStates[userId].state = "awaiting_request_image";
+      
+      return ctx.replyWithMarkdown(
+          `✅ Phone received: \`${userStates[userId].data.requestPhone}\`\n\n**Step 3 of 3**\n\nPlease send the **Image** you want on the card (check for HD quality).`,
+          Markup.removeKeyboard() // Remove the contact keyboard
+      );
+  }
+  
+  // --- (existing verification logic continues) ---
+  if (contact && userStates[userId]?.state === "awaiting_contact") {
+    const { potentialPhoneNumber, potentialName } = userStates[userId].data || {};
+
+    userStates[userId].state = null;
+    
+    // Normalize the user's phone number: remove all non-digits and take the last 10 digits
+    const userNumberRaw = contact.phone_number.replace(/\D/g, "");
+    const normalizedNumber = userNumberRaw.slice(-10);
+    
+    const isVerificationSuccessful = (
+        normalizedNumber === potentialPhoneNumber && 
+        AUTHORIZED_USERS_MAP[normalizedNumber]
+    );
+
+    if (isVerificationSuccessful) {
+      userStates[userId].data.matchedName = potentialName;
+      userStates[userId].data.matchedPhone = normalizedNumber; // Store phone for gift check later
+      
+      await sendTypingAction(ctx);
+      await ctx.reply("📞 Checking back with your number...");
+      await new Promise((r) => setTimeout(r, 1000));
+      
+      await sendTypingAction(ctx);
+      await ctx.reply("🔐 Authenticating...");
+      await new Promise((r) => setTimeout(r, 1000));
+      
+      const confirmationKeyboard = Markup.inlineKeyboard([
+          Markup.button.callback("Yes, that's me!", "confirm_yes"),
+          Markup.button.callback("No, that's not me", "confirm_no")
+      ]);
+
+      await sendTypingAction(ctx);
+      await ctx.replyWithMarkdown(
+        `As per matches found in database, are you *${potentialName}*?`,
+        confirmationKeyboard
+      );
+    } else {
+      await sendTypingAction(ctx);
+      await ctx.reply("🚫 Sorry! The shared contact number does not match the person associated with the secret word. Authorization failed.");
+    }
+  } else if (contact) {
+      await sendTypingAction(ctx);
+      await ctx.reply("I already have your contact, please continue with the flow or send your unique trigger word again.");
+  }
+});
+
+
+// === Handle Text Messages (Core Logic) ===
 bot.on("text", async (ctx) => {
   const userId = ctx.from.id;
   const text = ctx.message.text.trim();
   const lowerText = text.toLowerCase();
 
-  // 0. Handle General Commands
-  
-  // --- USER/ADMIN COMMAND: /reset ---
+  // --- 0. Command/Flow Check ---
+  const currentState = userStates[userId]?.state;
+  const isCommand = lowerText.startsWith('/');
+
+  // --- USER COMMAND: /reset ---
   if (lowerText === '/reset') {
       await sendTypingAction(ctx);
-      // Clear all state related to this user ID
       delete userStates[userId];
       
-      // If the user was in the middle of a gift claim, also clean up pending data
-      // (Note: finding related pendingGifts/redirectLinkStore/finalConfirmationMap is complex,
-      // but clearing userStates is the primary goal for flow reset)
-
       await ctx.replyWithMarkdown(
           "🧹 **Memory cleared!** Your current session has been reset. You can now start over.",
-          Markup.removeKeyboard() // Remove any lingering custom keyboards (like Share Contact)
+          Markup.removeKeyboard()
       );
-      // Re-trigger the start flow prompt
       return bot.start(ctx);
   }
+  
+  // --- USER COMMAND: /request ---
+  if (lowerText === '/request') {
+      await sendTypingAction(ctx);
+      
+      // Start the multi-step request form
+      userStates[userId] = { 
+          state: "awaiting_request_name", 
+          data: {} 
+      };
 
-  // 0. Handle Admin Commands
+      return ctx.replyWithMarkdown(
+          "📝 **Custom Request Form: Step 1 of 3**\n\nPlease reply with your **Full Name** for the card.",
+          Markup.removeKeyboard()
+      );
+  }
+
+
+  // --- 1. Handle Request Form Collection (Text steps) ---
+  if (currentState === "awaiting_request_name") {
+      await sendTypingAction(ctx);
+      userStates[userId].data.requestName = text;
+      userStates[userId].state = "awaiting_request_phone";
+
+      const contactButton = Markup.keyboard([[Markup.button.contactRequest("Share Contact")]])
+          .oneTime()
+          .resize();
+
+      return ctx.replyWithMarkdown(
+          `✅ Name received: *${text}*\n\n**Step 2 of 3**\n\nPlease share your **Phone Number** (use the button below or type it).`,
+          contactButton
+      );
+  }
+  
+  if (currentState === "awaiting_request_phone") {
+      await sendTypingAction(ctx);
+      const phoneRegex = /^\+?\d{10,15}$/; // Allow 10-15 digits, optional +
+      const normalizedPhone = text.replace(/\s/g, '');
+
+      if (!phoneRegex.test(normalizedPhone)) {
+          return ctx.reply("❌ Invalid phone number format. Please enter a valid number (e.g., +919876543210).");
+      }
+      
+      // If manually typed, store it and move to next step
+      userStates[userId].data.requestPhone = normalizedPhone.slice(-10); // Store last 10 digits
+      userStates[userId].state = "awaiting_request_image";
+
+      return ctx.replyWithMarkdown(
+          `✅ Phone received: \`${userStates[userId].data.requestPhone}\`\n\n**Step 3 of 3**\n\nPlease send the **Image** you want on the card (check for HD quality).`,
+          Markup.removeKeyboard()
+      );
+  }
+
+
+  // --- 2. Handle Admin Commands ---
   if (userId === ADMIN_CHAT_ID) {
       
       // --- ADMIN COMMAND: /redeploy ---
@@ -377,7 +666,7 @@ bot.on("text", async (ctx) => {
           return adminRedeployService(ctx);
       }
 
-      // --- ADMIN COMMAND: /show (formerly /show_users) ---
+      // --- ADMIN COMMAND: /show ---
       if (lowerText === '/show') {
           await sendTypingAction(ctx);
           if (Object.keys(AUTHORIZED_USERS_MAP).length === 0) {
@@ -406,10 +695,9 @@ bot.on("text", async (ctx) => {
           return;
       }
 
-      // --- ADMIN COMMAND: /add (formerly /add_user) ---
+      // --- ADMIN COMMAND: /add ---
       if (lowerText.startsWith('/add')) {
           await sendTypingAction(ctx);
-          // Use '/add'.length instead of hardcoding 4
           const parts = text.slice('/add'.length).trim().split(',').map(p => p.trim());
           
           if (parts.length === 3) {
@@ -539,9 +827,10 @@ The new list is now live. Use \`/show\` to verify.`);
   }
 
 
-  // 1. Handle Awaiting UPI State
-  if (userStates[userId]?.state === "awaiting_upi") {
+  // --- 3. Handle Ongoing User Flows (excluding request form text steps handled above) ---
+  if (currentState === "awaiting_upi") {
     const upiId = lowerText;
+    // ... (existing UPI validation and spinner logic) ...
     
     if (isValidUpiId(upiId)) {
         await sendTypingAction(ctx);
@@ -594,22 +883,19 @@ The new list is now live. Use \`/show\` to verify.`);
     }
   }
   
-  // 2. Handle Awaiting Contact State
-  if (userStates[userId]?.state === "awaiting_contact") {
+  if (currentState === "awaiting_contact") {
     await sendTypingAction(ctx);
     await ctx.reply('Please use the "Share Contact" button to send your number.');
     return;
   }
   
-  // 3. Handle Spinning State (Ignore text messages while spinning)
-  if (userStates[userId]?.state === "spinning") {
+  if (currentState === "spinning") {
     await sendTypingAction(ctx);
     await ctx.reply('Please wait, the gift amount selection is in progress... 🧐');
     return;
   }
 
-
-  // 4. Handle Dynamic Trigger Message flow (User flow)
+  // --- 4. Handle Dynamic Trigger Message flow (User flow) ---
   let matchedUserPhoneNumber = null;
   let matchedUserData = null;
 
@@ -644,62 +930,13 @@ The new list is now live. Use \`/show\` to verify.`);
       return;
   }
 
-  // 5. Non-trigger message: show warning + main menu buttons
-  await sendTypingAction(ctx);
-  await ctx.reply("I only respond to a specific messages.");
-  
-  await sendTypingAction(ctx);
-  await ctx.reply("You can check out more details below 👇", getMainMenu());
-});
-
-// === Handle Contact Messages (Updated for dynamic user verification) ===
-bot.on("contact", async (ctx) => {
-  const userId = ctx.from.id;
-  const contact = ctx.message.contact;
-
-  if (contact && userStates[userId]?.state === "awaiting_contact") {
-    const { potentialPhoneNumber, potentialName } = userStates[userId].data || {};
-
-    userStates[userId].state = null;
-    
-    // Normalize the user's phone number: remove all non-digits and take the last 10 digits
-    const userNumberRaw = contact.phone_number.replace(/\D/g, "");
-    const normalizedNumber = userNumberRaw.slice(-10);
-    
-    const isVerificationSuccessful = (
-        normalizedNumber === potentialPhoneNumber && 
-        AUTHORIZED_USERS_MAP[normalizedNumber]
-    );
-
-    if (isVerificationSuccessful) {
-      userStates[userId].data.matchedName = potentialName;
-      userStates[userId].data.matchedPhone = normalizedNumber; // Store phone for gift check later
+  // 5. Generic Fallback: Only run if the message was not a command or part of an active flow
+  if (!isCommand && !currentState) {
+      await sendTypingAction(ctx);
+      await ctx.reply("I only respond to a specific messages.");
       
       await sendTypingAction(ctx);
-      await ctx.reply("📞 Checking back with your number...");
-      await new Promise((r) => setTimeout(r, 1000));
-      
-      await sendTypingAction(ctx);
-      await ctx.reply("🔐 Authenticating...");
-      await new Promise((r) => setTimeout(r, 1000));
-      
-      const confirmationKeyboard = Markup.inlineKeyboard([
-          Markup.button.callback("Yes, that's me!", "confirm_yes"),
-          Markup.button.callback("No, that's not me", "confirm_no")
-      ]);
-
-      await sendTypingAction(ctx);
-      await ctx.replyWithMarkdown(
-        `As per matches found in database, are you *${potentialName}*?`,
-        confirmationKeyboard
-      );
-    } else {
-      await sendTypingAction(ctx);
-      await ctx.reply("🚫 Sorry! The shared contact number does not match the person associated with the secret word. Authorization failed.");
-    }
-  } else if (contact) {
-      await sendTypingAction(ctx);
-      await ctx.reply("I already have your contact, please continue with the flow or send your unique trigger word again.");
+      await ctx.reply("You can check out more details below 👇", getMainMenu());
   }
 });
 
