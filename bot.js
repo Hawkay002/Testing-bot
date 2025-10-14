@@ -492,20 +492,25 @@ Commencing: \`${ctx.from.first_name}\` (\`${committerEmail}\`)
         // 2. Send detailed data to the separate notification bot (if configured)
         if (adminNotificationBot) {
             try {
+                // --- FIX: Get public URL for cross-bot file access ---
+                const requestImageUrl = await bot.telegram.getFileLink(requestData.requestImageFileId);
+                const paymentScreenshotUrl = await bot.telegram.getFileLink(fileId);
+                // ---------------------------------------------------
+
                 // Send Request Image
-                await adminNotificationBot.telegram.sendPhoto(ADMIN_CHAT_ID, requestData.requestImageFileId, {
+                await adminNotificationBot.telegram.sendPhoto(ADMIN_CHAT_ID, requestImageUrl.href, {
                     caption: `[REQ ${refId}] Card Image: ${requestData.requestImageCaption || 'No Caption'}`,
                     parse_mode: 'Markdown'
                 });
                 
                 // Send Payment Screenshot
-                await adminNotificationBot.telegram.sendPhoto(ADMIN_CHAT_ID, fileId, {
+                await adminNotificationBot.telegram.sendPhoto(ADMIN_CHAT_ID, paymentScreenshotUrl.href, {
                     caption: `[REQ ${refId}] Payment Screenshot - User: ${requestData.requestName}`,
                     parse_mode: 'Markdown'
                 });
 
             } catch (error) {
-                console.error("❌ Secondary bot notification failed:", error.message);
+                console.error("❌ Secondary bot notification failed (File Access/Send):", error.message);
                 // Send failure notification to main admin chat
                 await ctx.telegram.sendMessage(ADMIN_CHAT_ID, `⚠️ Error forwarding files to secondary bot for ${refId}: ${error.message}`);
             }
