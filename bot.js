@@ -283,7 +283,6 @@ bot.on("text", async (ctx) => {
                   await updateAuthorizedUsersOnGithub(newAuthorizedUsers, ctx.from.first_name, ctx.from.username ? `${ctx.from.username}@telegram.org` : 'admin@telegram.org');
                   
                   // 3. Update the local map immediately
-                  // This is already done correctly, but will be overwritten on the next successful load from GitHub
                   AUTHORIZED_USERS_MAP = newAuthorizedUsers;
 
                   await ctx.replyWithMarkdown(`✅ User **${name}** added successfully!
@@ -606,43 +605,79 @@ bot.action(/^admin_init_pay:/, async (ctx) => {
 
     const { userId, userUpi, amount } = giftData;
     const refId = adminRef.replace('ADMIN_', '');
-    
-    const upiLink = `upi://pay?pa=${userUpi}&am=${amount}&pn=${encodeURIComponent("Bday Gift Payee")}&tr=${refId}`;
-    
-    const redirectId = Math.random().toString(36).substring(2, 15);
-    redirectLinkStore[redirectId] = upiLink;
-    
-    finalConfirmationMap[refId] = userId; 
 
-    const httpsRedirectLink = `${BOT_PUBLIC_BASE_URL}/pay-redirect?id=${redirectId}`;
+    try {
+        // --- Start of new error handling logic ---
+        
+        const upiLink = `upi://pay?pa=${userUpi}&am=${amount}&pn=${encodeURIComponent("Bday Gift Payee")}&tr=${refId}`;
+        
+        const redirectId = Math.random().toString(36).substring(2, 15);
+        // Store the UPI link using a random redirect ID
+        redirectLinkStore[redirectId] = upiLink;
+        
+        finalConfirmationMap[refId] = userId; 
+    
+        const httpsRedirectLink = `${BOT_PUBLIC_BASE_URL}/pay-redirect?id=${redirectId}`;
+    
+        // 1. Notify user that initialization started
+        await bot.telegram.sendMessage(
+            userId,
+            "✨ Payment initialization started, waiting for a few minutes, you'll soon receive your gift. 😊"
+        );
+        
+        // 2. Update admin message with the payment link
+        await ctx.editMessageText(
+            `🔗 *Payment Link for ₹${amount}* to \`${userUpi}\`\n\n**If the button fails, copy the VPA (\`${userUpi}\`) and pay manually.**`,
+            {
+                parse_mode: 'Markdown',
+                ...Markup.inlineKeyboard([
+                    Markup.button.url("🔥 Finalize Payment in UPI App (HTTPS) - Click to Pay", httpsRedirectLink) 
+                ])
+            }
+        );
+        
+        // 3. Send admin confirmation button
+        await ctx.telegram.sendMessage(
+            ADMIN_CHAT_ID,
+            `✅ Payment link initiated for ₹${amount} to ${userUpi}.\n\n*Click "Payment Done" ONLY after you have successfully completed the transaction in your UPI app.*`,
+            {
+                parse_mode: 'Markdown',
+                ...Markup.inlineKeyboard([
+                    Markup.button.callback("✅ Payment Done - Notify User", `payment_done:${refId}`)
+                ])
+            }
+        );
+        
+        delete pendingGifts[adminRef];
 
-    await bot.telegram.sendMessage(
-        userId,
-        "✨ Payment initialization started, waiting for few minutes you'll soon receive your gift. 😊"
-    );
-    
-    await ctx.editMessageText(
-        `🔗 *Payment Link for ₹${amount}* to \`${userUpi}\`\n\n**If the button fails, copy the VPA (\`${userUpi}\`) and pay manually.**`,
-        {
-            parse_mode: 'Markdown',
-            ...Markup.inlineKeyboard([
-                Markup.button.url("🔥 Finalize Payment in UPI App (HTTPS) - Click to Pay", httpsRedirectLink) 
-            ])
-        }
-    );
-    
-    await ctx.telegram.sendMessage(
-        ADMIN_CHAT_ID,
-        `✅ Payment link initiated for ₹${amount} to ${userUpi}.\n\n*Click "Payment Done" ONLY after you have successfully completed the transaction in your UPI app.*`,
-        {
-            parse_mode: 'Markdown',
-            ...Markup.inlineKeyboard([
-                Markup.button.callback("✅ Payment Done - Notify User", `payment_done:${refId}`)
-            ])
-        }
-    );
-    
-    delete pendingGifts[adminRef];
+        // --- End of successful logic ---
+
+    } catch (error) {
+        console.error("❌ Error during admin payment initialization:", error);
+        
+        // --- New error response for Admin ---
+        await ctx.editMessageText(
+            `❌ **ERROR:** Failed to generate payment link or send notification. Check logs.`,
+            { parse_mode: 'Markdown' }
+        );
+
+        // --- New error response for User with retry option ---
+        const userRetryKeyboard = Markup.inlineKeyboard([
+            Markup.button.callback("🎁 Ask for Gift (₹" + amount + ")", "ask_for_gift")
+        ]);
+
+        await bot.telegram.sendMessage(
+            userId,
+            `⚠️ **Unknown error occurred.** We couldn't initiate the payment link at this moment. Please retry again in a few moments.`,
+            { parse_mode: 'Markdown', ...userRetryKeyboard }
+        );
+        
+        // Re-add the gift data to pendingGifts for the retry logic to work, using a new adminRef if necessary,
+        // but for simplicity and consistency with the previous state, we can skip deleting it if it failed.
+        // Since the previous line `delete pendingGifts[adminRef]` is *after* the try block, we don't need to re-add it.
+        // We ensure that only the failed message is sent, and the gift data remains in `pendingGifts` 
+        // until the admin manually clears it or the user sends a new request.
+    }
 });
 
 
@@ -752,4 +787,4 @@ async function main() {
 }
 
 // Execute main function
-main(); 
+main();
