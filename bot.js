@@ -25,7 +25,7 @@ const RENDER_DEPLOY_HOOK = process.env.RENDER_DEPLOY_HOOK;
 const IMAGE_PATH = "Wishing Birthday.png"; 
 
 // === Authorized Users Map (Will be populated dynamically on startup) ===
-// Structure: { "phoneNumber": { name: "User Name", trigger_word: "unique_word" } }
+// Structure: { "phoneNumber": { name: "User Name", trigger_word: "unique_word", can_claim_gift: boolean } }
 let AUTHORIZED_USERS_MAP = {};
 let GITHUB_FILE_SHA = null; // Store the current file SHA, required for updates
 // ===============================================
@@ -44,9 +44,10 @@ const pendingGifts = {};
 const redirectLinkStore = {}; 
 const finalConfirmationMap = {};
 
-// NEW: Global state for the multi-step deletion command
-// user_id -> { state: "awaiting_deletion_choice", matches: { 1: { phone: "...", data: {...} }, ... } }
-const deletionStates = {};
+// Global state for the multi-step deletion command
+const deletionStates = {}; 
+// Global state for the multi-step gift management command
+const giftManagementStates = {};
 
 
 // === Function to load user data from GitHub (and get SHA for future updates) ===
@@ -72,9 +73,17 @@ async function loadAuthorizedUsers() {
         }
         const metadata = await metadataResponse.json();
         
-        // Update global state
+        // Update global state and normalize user data (add default can_claim_gift)
         if (typeof data === 'object' && data !== null && metadata.sha) {
-            AUTHORIZED_USERS_MAP = data;
+            // Apply default setting to existing users if the field is missing
+            const normalizedData = Object.fromEntries(
+                Object.entries(data).map(([phone, userData]) => [
+                    phone,
+                    { ...userData, can_claim_gift: userData.can_claim_gift !== false }
+                ])
+            );
+
+            AUTHORIZED_USERS_MAP = normalizedData;
             GITHUB_FILE_SHA = metadata.sha;
             const userCount = Object.keys(AUTHORIZED_USERS_MAP).length;
             console.log(`✅ Loaded ${userCount} users. Current SHA: ${GITHUB_FILE_SHA}`);
@@ -97,8 +106,23 @@ async function updateAuthorizedUsersOnGithub(newContent, committerName, committe
         throw new Error("Current file SHA is unknown. Cannot perform update.");
     }
     
+    // Ensure all users in newContent are stored without the default value if possible
+    // (This is primarily for GitHub file cleanliness, but the internal map uses the full structure)
+    const contentToCommit = Object.fromEntries(
+        Object.entries(newContent).map(([phone, userData]) => [
+            phone,
+            // Only explicitly save 'can_claim_gift' if it's false
+            userData.can_claim_gift === false 
+                ? { ...userData, can_claim_gift: false }
+                : { ...userData, can_claim_gift: undefined } // Removes true/undefined from saved JSON
+        ])
+    );
+
+    // Filter out undefined properties before stringify (for clean JSON)
+    const cleanedContent = JSON.parse(JSON.stringify(contentToCommit)); 
+
     // Base64 encode the new JSON content
-    const contentEncoded = Buffer.from(JSON.stringify(newContent, null, 2)).toString('base64');
+    const contentEncoded = Buffer.from(JSON.stringify(cleanedContent, null, 2)).toString('base64');
     
     const apiUrl = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${GITHUB_FILE_PATH}`;
 
@@ -231,7 +255,6 @@ bot.action(/^admin_delete:/, async (ctx) => {
         delete newAuthorizedUsers[phoneToDelete];
         
         // 2. Update the file on GitHub
-        // Use a generic committer email if admin doesn't have a username
         const committerEmail = ctx.from.username ? `${ctx.from.username}@telegram.org` : 'admin@telegram.org';
         const commitMessage = `feat(bot): Remove user ${userName} (${phoneToDelete}) via Telegram`;
 
@@ -252,6 +275,66 @@ bot.action(/^admin_delete:/, async (ctx) => {
         await ctx.editMessageText(`❌ Failed to remove user **${userName}**: ${error.message}. Please check logs and GitHub status.`, { parse_mode: 'Markdown' });
     }
 });
+
+
+// === Handle Gift Eligibility Management Actions (Revoke/Allow) ===
+bot.action(/^admin_gift_manage:/, async (ctx) => {
+    const userId = ctx.from.id;
+    if (userId !== ADMIN_CHAT_ID) {
+        return ctx.reply("🚫 You are not authorized to perform this admin action.");
+    }
+    
+    const [actionType, phone] = ctx.match.input.split(':').slice(1); // 'revoke' or 'allow', then phone number
+    const isRevoke = actionType === 'revoke';
+
+    await ctx.editMessageText(`⏳ Attempting to ${isRevoke ? 'REVOKE' : 'ALLOW'} gift eligibility for \`${phone}\`...`);
+    
+    if (!AUTHORIZED_USERS_MAP[phone]) {
+        return ctx.editMessageText(`❌ Error: User with phone number \`${phone}\` not found in the current list.`, { parse_mode: 'Markdown' });
+    }
+
+    const userName = AUTHORIZED_USERS_MAP[phone].name;
+    const newStatus = !isRevoke; // false for revoke, true for allow
+    
+    try {
+        // 1. Prepare new data structure (update the property)
+        const newAuthorizedUsers = { ...AUTHORIZED_USERS_MAP };
+        newAuthorizedUsers[phone] = {
+            ...newAuthorizedUsers[phone],
+            can_claim_gift: newStatus
+        };
+        
+        // 2. Update the file on GitHub
+        const committerEmail = ctx.from.username ? `${ctx.from.username}@telegram.org` : 'admin@telegram.org';
+        const statusText = newStatus ? 'allowed' : 'revoked';
+        const commitMessage = `feat(bot): Gift eligibility ${statusText} for ${userName} (${phone}) via Telegram`;
+
+        await updateAuthorizedUsersOnGithub(newAuthorizedUsers, ctx.from.first_name, committerEmail, commitMessage);
+        
+        // 3. Update the local map immediately
+        AUTHORIZED_USERS_MAP = newAuthorizedUsers;
+        
+        // 4. Clean up state
+        if (giftManagementStates[userId]) {
+            delete giftManagementStates[userId];
+        }
+
+        await ctx.editMessageText(`✅ Gift eligibility for **${userName}** (\`${phone}\`) has been **${statusText.toUpperCase()}** and committed to GitHub!`, { parse_mode: 'Markdown' });
+        
+    } catch (error) {
+        console.error("GitHub Gift Management Error:", error);
+        await ctx.editMessageText(`❌ Failed to update gift status for **${userName}**: ${error.message}. Please check logs and GitHub status.`, { parse_mode: 'Markdown' });
+    }
+});
+
+
+// === Admin Search Helper Function (used by /remove, /revoke, /allow) ===
+function searchUsers(query) {
+    return Object.entries(AUTHORIZED_USERS_MAP)
+        .filter(([phone, data]) => 
+            phone.includes(query) || data.name.toLowerCase().includes(query.toLowerCase())
+        );
+}
 
 // === Handle Text Messages (Updated for dynamic trigger word check and admin commands) ===
 bot.on("text", async (ctx) => {
@@ -275,17 +358,16 @@ bot.on("text", async (ctx) => {
           }
           
           const userList = Object.entries(AUTHORIZED_USERS_MAP)
-              .map(([phone, data], index) => 
-                  `${index + 1}. *${data.name}* (\`${phone}\`) -> \`${data.trigger_word}\``
-              )
+              .map(([phone, data], index) => {
+                  const giftStatus = data.can_claim_gift ? '✅' : '🚫';
+                  return `${index + 1}. ${giftStatus} *${data.name}* (\`${phone}\`) -> \`${data.trigger_word}\``;
+              })
               .join('\n');
           
           const header = `👤 *Authorized Users List* (${Object.keys(AUTHORIZED_USERS_MAP).length} total):\n\n`;
           
-          // Telegram messages have a 4096 character limit
           if (userList.length + header.length > 4096) {
               await ctx.replyWithMarkdown(header + "List is too long, displaying partial content...");
-              // Simple splitting logic for large lists
               const maxChunkSize = 3500;
               for (let i = 0; i < userList.length; i += maxChunkSize) {
                   await ctx.replyWithMarkdown(userList.substring(i, i + maxChunkSize));
@@ -297,10 +379,9 @@ bot.on("text", async (ctx) => {
           return;
       }
 
-      // --- ADMIN COMMAND: /add_user (Updated separator to comma) ---
+      // --- ADMIN COMMAND: /add_user ---
       if (lowerText.startsWith('/add_user')) {
           await sendTypingAction(ctx);
-          // Use comma as separator, then trim whitespace from all parts
           const parts = text.slice('/add_user'.length).trim().split(',').map(p => p.trim());
           
           if (parts.length === 3) {
@@ -320,20 +401,18 @@ bot.on("text", async (ctx) => {
               }
 
               try {
-                  // 1. Prepare new data structure
                   const newAuthorizedUsers = { ...AUTHORIZED_USERS_MAP };
                   newAuthorizedUsers[phoneNumber] = { 
                       name: name, 
-                      trigger_word: triggerWord.toLowerCase() 
+                      trigger_word: triggerWord.toLowerCase(),
+                      can_claim_gift: true // Default to allowed
                   };
                   
                   const committerEmail = ctx.from.username ? `${ctx.from.username}@telegram.org` : 'admin@telegram.org';
                   const commitMessage = `feat(bot): Add new user via Telegram for ${name}`;
 
-                  // 2. Update the file on GitHub
                   await updateAuthorizedUsersOnGithub(newAuthorizedUsers, ctx.from.first_name, committerEmail, commitMessage);
                   
-                  // 3. Update the local map immediately
                   AUTHORIZED_USERS_MAP = newAuthorizedUsers;
 
                   await ctx.replyWithMarkdown(`✅ User **${name}** added successfully!
@@ -351,7 +430,7 @@ The new list is now live. Use \`/show_users\` to verify.`);
           }
       }
 
-      // --- NEW ADMIN COMMAND: /remove ---
+      // --- ADMIN COMMAND: /remove ---
       if (lowerText.startsWith('/remove')) {
           await sendTypingAction(ctx);
           const query = text.slice('/remove'.length).trim();
@@ -360,42 +439,70 @@ The new list is now live. Use \`/show_users\` to verify.`);
               return ctx.replyWithMarkdown("❌ Invalid command format. Use: `/remove <10-digit phone/partial name>`");
           }
 
-          // 1. Search for matches (case-insensitive for name, partial match for phone)
-          const matches = Object.entries(AUTHORIZED_USERS_MAP)
-              .filter(([phone, data]) => 
-                  phone.includes(query) || data.name.toLowerCase().includes(query.toLowerCase())
-              );
+          const matches = searchUsers(query);
               
           if (matches.length === 0) {
               return ctx.replyWithMarkdown(`🔍 No users found matching: **\`${query}\`**`);
           }
 
-          // 2. Prepare the list and keyboard for confirmation
           let matchText = `🔍 Found *${matches.length}* user(s) matching **\`${query}\`**:\n\n`;
           let keyboardButtons = [];
-          const currentMatches = {}; // Temporary map to hold the matches for state tracking
 
           matches.forEach(([phone, data], index) => {
               const matchId = index + 1;
-              const formattedName = data.name.replace(/([_*`[\]()])/g, '\\$1'); // Escape markdown
+              const formattedName = data.name.replace(/([_*`[\]()])/g, '\\$1'); 
               
               matchText += `${matchId}. Name: *${formattedName}*\n   Phone: \`${phone}\`\n   Trigger: \`${data.trigger_word}\`\n\n`;
               
-              // Button action uses the phone number for direct deletion
-              keyboardButtons.push(Markup.button.callback(`Remove ${matchId} (${data.name})`, `admin_delete:${phone}`)); 
-              
-              currentMatches[matchId] = { phone, data };
+              keyboardButtons.push(Markup.button.callback(`Remove ${matchId} (${data.name})`, `admin_delete:${phone}`));
           });
           
-          // 3. Store the state and send the confirmation message
-          // deletionStates[userId] = { state: "awaiting_deletion_choice", matches: currentMatches }; 
-          // Note: We don't strictly need to store 'matches' here since the button already contains the phone number.
-
-          // Split buttons into rows of 1 for better display on mobile
           const rows = keyboardButtons.map(btn => [btn]);
           
           await ctx.replyWithMarkdown(
-              matchText + "⚠️ *Select a user to permanently remove them from the authorized list. This action is irreversible.*", 
+              matchText + "⚠️ *Select a user to permanently REMOVE them from the authorized list. This action is irreversible.*", 
+              Markup.inlineKeyboard(rows)
+          );
+          
+          return;
+      }
+
+      // --- ADMIN COMMAND: /revoke or /allow ---
+      if (lowerText.startsWith('/revoke') || lowerText.startsWith('/allow')) {
+          await sendTypingAction(ctx);
+          const command = lowerText.startsWith('/revoke') ? 'revoke' : 'allow';
+          const query = text.slice(`/${command}`.length).trim();
+
+          if (!query) {
+              return ctx.replyWithMarkdown(`❌ Invalid command format. Use: \`/${command} <10-digit phone/partial name>\``);
+          }
+
+          const matches = searchUsers(query);
+              
+          if (matches.length === 0) {
+              return ctx.replyWithMarkdown(`🔍 No users found matching: **\`${query}\`**`);
+          }
+
+          let matchText = `🔍 Found *${matches.length}* user(s) matching **\`${query}\`**:\n\n`;
+          let keyboardButtons = [];
+
+          matches.forEach(([phone, data], index) => {
+              const matchId = index + 1;
+              const formattedName = data.name.replace(/([_*`[\]()])/g, '\\$1'); 
+              const currentStatus = data.can_claim_gift ? '✅ ALLOWED' : '🚫 REVOKED';
+              
+              matchText += `${matchId}. *${formattedName}* - Status: ${currentStatus}\n   Phone: \`${phone}\`\n\n`;
+              
+              keyboardButtons.push(Markup.button.callback(
+                  `${command.toUpperCase()} ${matchId} (${data.name})`, 
+                  `admin_gift_manage:${command}:${phone}`
+              ));
+          });
+          
+          const rows = keyboardButtons.map(btn => [btn]);
+          
+          await ctx.replyWithMarkdown(
+              matchText + `🚨 *Select a user to **${command.toUpperCase()}** their gift eligibility.*`, 
               Markup.inlineKeyboard(rows)
           );
           
@@ -538,6 +645,7 @@ bot.on("contact", async (ctx) => {
 
     if (isVerificationSuccessful) {
       userStates[userId].data.matchedName = potentialName;
+      userStates[userId].data.matchedPhone = normalizedNumber; // Store phone for gift check later
       
       await sendTypingAction(ctx);
       await ctx.reply("📞 Checking back with your number...");
@@ -612,10 +720,12 @@ bot.action('confirm_no', async (ctx) => {
 });
 
 
-// === Handle Ratings (Original Flow) ===
+// === Handle Ratings (Updated to check for gift eligibility) ===
 bot.action(/^rating_/, async (ctx) => {
+  const userId = ctx.from.id;
   const rating = ctx.match.input.split("_")[1];
   const username = ctx.from.username || ctx.from.first_name;
+  const matchedPhone = userStates[userId]?.data?.matchedPhone;
 
   await ctx.editMessageText(`Thank you for your rating of ${rating} ⭐!`);
 
@@ -625,15 +735,26 @@ bot.action(/^rating_/, async (ctx) => {
   );
 
   await sendTypingAction(ctx);
-  const giftKeyboard = Markup.inlineKeyboard([
-    Markup.button.callback("Yes, I want a gift! 🥳", "gift_yes"),
-    Markup.button.callback("No, thank you.", "gift_no"),
-  ]);
+  
+  // Check if the user is eligible for the gift
+  const isEligible = matchedPhone && AUTHORIZED_USERS_MAP[matchedPhone]?.can_claim_gift;
+  
+  if (isEligible) {
+    const giftKeyboard = Markup.inlineKeyboard([
+        Markup.button.callback("Yes, I want a gift! 🥳", "gift_yes"),
+        Markup.button.callback("No, thank you.", "gift_no"),
+    ]);
 
-  await ctx.replyWithMarkdown(
-    "That's wonderful! We have one more surprise. Would you like a *bonus mystery gift* from us 👀?",
-    giftKeyboard
-  );
+    await ctx.replyWithMarkdown(
+      "That's wonderful! We have one more surprise. Would you like a *bonus mystery gift* from us 👀?",
+      giftKeyboard
+    );
+  } else {
+    // User is not eligible, skip the gift offer
+    await ctx.replyWithMarkdown(
+      "Thanks again for celebrating with us! We hope you enjoyed your personalized card. 😊"
+    );
+  }
 });
 
 // === Gift Flow Actions (Original Flow) ===
