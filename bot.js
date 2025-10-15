@@ -467,9 +467,10 @@ bot.action(/^admin_decline_final:/, async (ctx) => {
     }
 
     // Input format: admin_decline_final:<refId>:<reasonText/no_comment>
-    const parts = ctx.match.input.split(':')[1];
-    const refId = parts[0];
-    const reason = parts[1] === 'no_comment' ? null : parts.slice(1).join(':').replace(/%20/g, ' '); // Handle multi-word reason
+    const parts = ctx.match.input.split(':');
+    const refId = parts[1];
+    // Reconstruct reason, handling cases where it was part of the button data
+    const reason = parts.length > 2 && parts[2] !== 'no_comment' ? parts.slice(2).join(':').replace(/%20/g, ' ') : null;
     
     const requestData = pendingRequests[refId];
 
@@ -588,7 +589,6 @@ bot.on(['photo', 'document'], async (ctx) => {
         await ctx.reply("✅ Screenshot received. Your request is now being reviewed! Please wait for admin confirmation.");
         
         const requestData = state.data;
-        const committerEmail = ctx.from.username ? `${ctx.from.username}@telegram.org` : 'admin@telegram.org';
         const refId = `REQ${Date.now()}`;
         
         // 1. Store request globally for admin actions (MANDATORY)
@@ -1457,27 +1457,44 @@ async function main() {
     if (!RENDER_DEPLOY_HOOK) {
         console.warn("⚠️ WARNING: RENDER_DEPLOY_HOOK is not set. Admin /redeploy feature will NOT work.");
     }
-
-    // Attempt to drop pending updates from the main bot to prevent 409 Conflict
-    try {
-        await bot.telegram.setWebhook(''); // Clear any webhook setting
-        await bot.telegram.getUpdates(0, 100, -1); // Consume any pending updates
-        console.log("Cleanup complete: Webhook cleared and pending updates consumed.");
-    } catch (e) {
-        // Log if cleanup fails but don't stop the bot start
-        console.warn("⚠️ Cleanup failed, proceeding with launch. Error:", e.message);
+    if (!BOT_PUBLIC_BASE_URL) {
+        console.error("❌ FATAL ERROR: BOT_PUBLIC_BASE_URL is not set. Cannot run in Webhook mode.");
+        process.exit(1);
     }
-
+    
     // 1. Load data from the external GitHub source and get the current SHA
     await loadAuthorizedUsers();
     
-    // 2. Start Bot
-    bot.launch();
-    console.log("🤖 Bot is running...");
+    // 2. Configure and Start Bot with Webhook
     
-    // 3. Graceful shutdown handlers
-    process.once("SIGINT", () => bot.stop("SIGINT"));
-    process.once("SIGTERM", () => bot.stop("SIGTERM"));
+    // Define a secure, secret path for Telegram to send updates to
+    const WEBHOOK_PATH = '/telegraf-webhook-secret';
+    const WEBHOOK_URL = `${BOT_PUBLIC_BASE_URL}${WEBHOOK_PATH}`;
+    
+    try {
+        // 2a. Clear any previous webhooks, consume pending updates, and set the new one.
+        // This is crucial to prevent the 409 Conflict error.
+        await bot.telegram.setWebhook(''); 
+        await bot.telegram.getUpdates(0, 100, -1); 
+        await bot.telegram.setWebhook(WEBHOOK_URL);
+        
+        console.log(`✅ Webhook set successfully to: ${WEBHOOK_URL}`);
+        console.log("Cleanup complete: Webhook cleared and pending updates consumed.");
+    } catch (e) {
+        console.error("❌ FATAL ERROR: Failed to set up webhook.", e.message);
+        process.exit(1);
+    }
+
+    // 3. Mount the bot's webhook handler to the existing Express app.
+    // The Express app is already configured to listen on PORT.
+    app.use(bot.webhookCallback(WEBHOOK_PATH));
+
+    console.log("🤖 Bot is running in Webhook mode...");
+    
+    // 4. Graceful shutdown handlers
+    // Use process.exit(0) for graceful exit in webhook mode on platforms like Render
+    process.once("SIGINT", () => { console.log("SIGINT received, shutting down."); process.exit(0); });
+    process.once("SIGTERM", () => { console.log("SIGTERM received, shutting down."); process.exit(0); });
 }
 
 // Execute main function
