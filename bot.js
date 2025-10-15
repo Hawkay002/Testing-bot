@@ -556,15 +556,30 @@ bot.on(['photo', 'document'], async (ctx) => {
         // Send UPI QR Code
         await sendTypingAction(ctx);
         if (fs.existsSync(UPI_QR_CODE_PATH)) {
+            // FIX: Switched to parse_mode: 'HTML' for the complex caption to avoid Markdown parsing errors
+            const captionHtml = `
+<b>💰 Payment Required</b>
+
+Please pay a standard fee of <i>₹${REQUEST_FEE}</i> for custom card design requests. Pay via the QR code above or VPA: <code>${BOT_ADMIN_VPA}</code>.
+
+And if you would like to include the Shagun feature with your request, please send an extra ₹500 making a total of ₹550.
+
+ℹ️ What is the Shagun feature?
+
+- After a user gives a rating between 1–5 stars, they will get a message asking if they would like a surprise gift. If they tap “Yes”, the bot will ask for their UPI ID. Then it will randomly pick a number between 1 and 500 — that number becomes their Shagun amount, which is sent to them by the admin.
+
+The rest of the ₹500 (after the Shagun amount is decided) will be refunded to the same UPI ID the user provided while making the request.
+If no Shagun amount is claimed, you will receive a full refund of your ₹500 within 24 hours or less.
+
+For any unresolved issues or questions, use /masters_social to contact the owner directly.
+            `.trim(); // Using trim() to clean up leading/trailing whitespace
+
             await ctx.replyWithPhoto({ source: UPI_QR_CODE_PATH }, {
-                caption: `💰 **Payment Required**\n\nPlease pay a standard fee of *₹${REQUEST_FEE}* for custom card design requests. Pay via the QR code above or VPA: \`${BOT_ADMIN_VPA}\`.\n\nAnd if you would like to include the Shagun feature with your request, please send an extra ₹500 making a total of ₹550.
-\n\nℹ️ What is the Shagun feature?
-\n- After a user gives a rating between 1–5 stars, they will get a message asking if they would like a surprise gift. If they tap “Yes”, the bot will ask for their UPI ID. Then it will randomly pick a number between 1 and 500 — that number becomes their Shagun amount, which is sent to them by the admin.
-\nThe rest of the ₹500 (after the Shagun amount is decided) will be refunded to the same UPI ID the user provided while making the request.\nIf no Shagun amount is claimed, you will receive a full refund of your ₹500 within 24 hours or less.\n\nFor any unresolved issues or questions, use /masters_social to contact the owner directly.`,
-                parse_mode: 'Markdown'
+                caption: captionHtml,
+                parse_mode: 'HTML' // <-- FIX: Changed from 'Markdown' to 'HTML'
             });
         } else {
-             // Fallback if QR code is missing
+             // Fallback if QR code is missing (kept original Markdown for the fallback)
              await ctx.replyWithMarkdown(
                 `💰 **Payment Required**\n\nTo proceed with your custom card, please pay the standard fee of *₹${REQUEST_FEE}* to VPA: \`${BOT_ADMIN_VPA}\`.\n\nAnd if you’d like to include the Shagun feature with your request, please send an extra ₹500.
 \n\nℹ️ What’s the Shagun feature?
