@@ -389,7 +389,10 @@ bot.action(/^admin_grant_request:/, async (ctx) => {
             
 Your chosen **unique secret word** is:
 \`${requestData.trigger}\`
-Use this when the bot sends "Hi! Send your unique secret word you just copied to get your personalized card! ❤️❤️❤️ message.`,
+Use this when the bot sends "Hi! Send your unique secret word you just copied to get your personalized card! ❤️❤️❤️ message.
+
+If you’re requesting it on someone else’s behalf, share this link with them along with the trigger word.
+https://t.me/Wish_ind_bot`,
             { parse_mode: 'Markdown' }
         );
     } catch (error) {
