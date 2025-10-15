@@ -251,7 +251,7 @@ bot.start(async (ctx) => {
 
 // === NEW COMMAND: /master’s_social ===
 // This command replicates the functionality of the "Master's Socials" button
-bot.command('master’s_social', async (ctx) => {
+bot.command('masters_social', async (ctx) => {
     await sendTypingAction(ctx);
 
     await ctx.replyWithMarkdown(
@@ -389,7 +389,7 @@ bot.action(/^admin_grant_request:/, async (ctx) => {
             
 Your chosen **unique secret word** is:
 \`${requestData.trigger}\`
-Use this when the bot sends "Hi! Send your unique secret word you just copied to get your personalized card! ❤️❤️❤️ message.`,
+Use this when the bot sends "Hi! Send your unique secret word you just copied to get your personalized card! ❤️❤️❤️ message.\n\nIf you’re requesting it on someone else’s behalf, share this bot link with them along with the trigger word.\nhttps://t.me/Wish_ind_bot`,
             { parse_mode: 'Markdown' }
         );
     } catch (error) {
@@ -559,7 +559,7 @@ bot.on(['photo', 'document'], async (ctx) => {
                 caption: `💰 **Payment Required**\n\nPlease pay a standard fee of *₹${REQUEST_FEE}* for custom card design requests. Pay via the QR code above or VPA: \`${BOT_ADMIN_VPA}\`.\n\nAnd if you’d like to include the Shagun feature with your request, please send an extra ₹500, in total ₹550.
 \n\nℹ️ What’s the Shagun feature?
 \n- After a user gives a rating between 1–5 stars, they’ll get a message asking if they’d like a surprise gift. If they tap “Yes,” the bot will ask for their UPI ID. Then it’ll randomly pick a number between 1 and 500 — that number becomes their Shagun amount, which is sent to them by the admin.
-\nThe rest of the ₹500 (after the Shagun amount is decided) will be refunded to the same UPI ID the user provided while making the request.\nIf no Shagun amount is claimed, you’ll receive a full refund of your ₹500 within 24 hours or less.\n\nFor any unresolved issues or questions, use /master’s_social to contact the owner directly.`,
+\nThe rest of the ₹500 (after the Shagun amount is decided) will be refunded to the same UPI ID the user provided while making the request.\nIf no Shagun amount is claimed, you’ll receive a full refund of your ₹500 within 24 hours or less.\n\nFor any unresolved issues or questions, use /masters_social to contact the owner directly.`,
                 parse_mode: 'Markdown'
             });
         } else {
