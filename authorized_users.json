@@ -9,7 +9,8 @@
   },
   "9903403883": {
     "name": "Shankar Debnath",
-    "trigger_word": "shankarbday"
+    "trigger_word": "shankarbday",
+    "can_claim_gift": false
   },
   "8276829124": {
     "name": "Sikha Debnath",
