@@ -22,7 +22,7 @@ const BOT_PUBLIC_BASE_URL = "https://testing-bot-v328.onrender.com";
 const RENDER_DEPLOY_HOOK = process.env.RENDER_DEPLOY_HOOK;
 // ⚠️ 
 
-const IMAGE_PATH = "Wishing Birthday.png"; 
+const IMAGE_PATH = "Wishing Birthday.jpg"; 
 
 // === REQUEST MANAGEMENT CONSTANTS ===
 const UPI_QR_CODE_PATH = "upi_qr_code.png"; // Placeholder path for QR code image
