@@ -314,11 +314,7 @@ bot.action(/^admin_gift_manage:/, async (ctx) => {
         return ctx.reply("🚫 You are not authorized to perform this admin action.");
     }
     
-    // Split input and determine action type
-    const parts = ctx.match.input.split(':');
-    const actionType = parts[1]; // 'revoke' or 'allow'
-    const phone = parts[2];
-
+    const [actionType, phone] = ctx.match.input.split(':')[1]; // 'revoke' or 'allow', then phone number
     const isRevoke = actionType === 'revoke';
 
     await ctx.editMessageText(`⏳ Attempting to ${isRevoke ? 'REVOKE' : 'ALLOW'} gift eligibility for \`${phone}\`...`);
@@ -393,7 +389,7 @@ bot.action(/^admin_grant_request:/, async (ctx) => {
             
 Your chosen **unique secret word** is:
 \`${requestData.trigger}\`
-Use this when the bot sends "Hi! Send your unique secret word you just copied to get your personalized card! ❤️❤️❤️ message.\n\nIf you’re requesting it on someone else’s behalf, share this bot link with them along with the trigger word.\nhttps://t.me/Wish_ind_bot`,
+Use this when the bot sends "Hi! Send your unique secret word you just copied to get your personalized card! ❤️❤️❤️ message.`,
             { parse_mode: 'Markdown' }
         );
     } catch (error) {
@@ -471,20 +467,16 @@ bot.action(/^admin_decline_final:/, async (ctx) => {
     }
 
     // Input format: admin_decline_final:<refId>:<reasonText/no_comment>
-    // Note: If coming from a text reply, ctx.match.input will be 'admin_decline_final:<refId>:<reasonText>'
-    const inputParts = ctx.match.input.split(':').slice(1);
-    const refId = inputParts[0];
-    const reasonParts = inputParts.slice(1);
-    const reason = reasonParts.length > 0 && reasonParts[0] !== 'no_comment' ? reasonParts.join(':').replace(/%20/g, ' ') : null;
+    const parts = ctx.match.input.split(':')[1];
+    const refId = parts[0];
+    const reason = parts[1] === 'no_comment' ? null : parts.slice(1).join(':').replace(/%20/g, ' '); // Handle multi-word reason
     
     const requestData = pendingRequests[refId];
 
     // Determine the message ID to reply to (either the original details message or the reason prompt)
     let replyToId = ctx.callbackQuery?.message?.message_id; // Default to button message
-    
-    // If state exists, it means we are coming from the /decline_init flow.
-    // If state has originalMessageId, use that for context in the reply.
     if (userStates[adminId]?.data?.originalMessageId) {
+        // If coming from a text reply (handled below), use the original notification ID
         replyToId = userStates[adminId].data.originalMessageId;
     }
     
@@ -495,7 +487,7 @@ bot.action(/^admin_decline_final:/, async (ctx) => {
     let userMessage;
     if (reason) {
         userMessage = `❌ **Your request has been declined.**
-Reason: *${decodeURIComponent(reason)}* Your payment of ₹${REQUEST_FEE} will be refunded to your provided UPI ID (\`${requestData.refundUpi}\`) within 24 hours or less.`;
+Reason: *${reason}* Your payment of ₹${REQUEST_FEE} will be refunded to your provided UPI ID (\`${requestData.refundUpi}\`) within 24 hours or less.`;
     } else {
         userMessage = `❌ **Your request has been declined.**
         
@@ -560,44 +552,24 @@ bot.on(['photo', 'document'], async (ctx) => {
         
         await ctx.reply("✅ Card Image received. Proceeding to payment step...");
 
-        // --- FIX IMPLEMENTED HERE: Added try/catch around replyWithPhoto ---
-        const paymentDetails = `
-💰 **Payment Required**
-Please pay a standard fee of *₹${REQUEST_FEE}* for custom card design requests. Pay via VPA: \`${BOT_ADMIN_VPA}\`.
-
-**Shagun Feature Option:**
-If you’d like to include the **Shagun feature** with your request, please send an extra ₹500, making the total ₹550.
-
-ℹ️ **What’s the Shagun feature?**
-After a user gives a rating, they’ll get a message asking if they’d like a surprise gift. If they tap “Yes,” the bot asks for their UPI ID. It then randomly picks a number between 1 and 500 — that number becomes their Shagun amount, which is sent to them by the admin. The rest of the ₹500 (after the Shagun amount is decided) will be refunded to the same UPI ID the user provided while making the request. If no Shagun amount is claimed, you’ll receive a full refund of your ₹500 within 24 hours or less.
-
-For any unresolved issues or questions, use /masters_social to contact the owner directly.`;
-        
+        // Send UPI QR Code
         await sendTypingAction(ctx);
-        let qrSentSuccessfully = false;
-
         if (fs.existsSync(UPI_QR_CODE_PATH)) {
-            try {
-                // Attempt to send the QR Code image
-                await ctx.replyWithPhoto({ source: UPI_QR_CODE_PATH }, {
-                    caption: paymentDetails,
-                    parse_mode: 'Markdown'
-                });
-                qrSentSuccessfully = true;
-            } catch (photoError) {
-                 // If the photo fails to send (e.g., file too big, permissions, upload error)
-                 console.error(`❌ Failed to send UPI QR Code photo: ${photoError.message}`);
-                 await ctx.replyWithMarkdown(`⚠️ **Error:** Failed to send UPI QR Code image. Please use the VPA provided below to make the payment.`);
-                 
-                 // Send the payment details as a text message instead
-                 await ctx.replyWithMarkdown(paymentDetails);
-            }
-        } 
-        
-        // If the file was not found (or if sending the photo failed and we sent the text fallback), proceed with the final prompt.
-        if (!qrSentSuccessfully && !fs.existsSync(UPI_QR_CODE_PATH)) {
-             // Fallback if QR code is missing from disk
-             await ctx.replyWithMarkdown(paymentDetails);
+            await ctx.replyWithPhoto({ source: UPI_QR_CODE_PATH }, {
+                caption: `💰 **Payment Required**\n\nPlease pay a standard fee of *₹${REQUEST_FEE}* for custom card design requests. Pay via the QR code above or VPA: \`${BOT_ADMIN_VPA}\`.\n\nAnd if you would like to include the Shagun feature with your request, please send an extra ₹500 making a total of ₹550.
+\n\nℹ️ What is the Shagun feature?
+\n- After a user gives a rating between 1–5 stars, they will get a message asking if they would like a surprise gift. If they tap “Yes”, the bot will ask for their UPI ID. Then it will randomly pick a number between 1 and 500 — that number becomes their Shagun amount, which is sent to them by the admin.
+\nThe rest of the ₹500 (after the Shagun amount is decided) will be refunded to the same UPI ID the user provided while making the request.\nIf no Shagun amount is claimed, you will receive a full refund of your ₹500 within 24 hours or less.\n\nFor any unresolved issues or questions, use /masters_social to contact the owner directly.`,
+                parse_mode: 'Markdown'
+            });
+        } else {
+             // Fallback if QR code is missing
+             await ctx.replyWithMarkdown(
+                `💰 **Payment Required**\n\nTo proceed with your custom card, please pay the standard fee of *₹${REQUEST_FEE}* to VPA: \`${BOT_ADMIN_VPA}\`.\n\nAnd if you’d like to include the Shagun feature with your request, please send an extra ₹500.
+\n\nℹ️ What’s the Shagun feature?
+\n- After a user gives a rating between 1–5 stars, they’ll get a message asking if they’d like a surprise gift. If they tap “Yes,” the bot will ask for their UPI ID. Then it’ll randomly pick a number between 1 and 500 — that number becomes their Shagun amount, which is sent to them by the admin.
+\nThe rest of the ₹500 (after the Shagun amount is decided) will be refunded to the same UPI ID the user provided while making the request.`
+             );
              console.error(`Error: UPI QR Code not found at ${UPI_QR_CODE_PATH}`);
         }
         
@@ -616,6 +588,7 @@ For any unresolved issues or questions, use /masters_social to contact the owner
         await ctx.reply("✅ Screenshot received. Your request is now being reviewed! Please wait for admin confirmation.");
         
         const requestData = state.data;
+        const committerEmail = ctx.from.username ? `${ctx.from.username}@telegram.org` : 'admin@telegram.org';
         const refId = `REQ${Date.now()}`;
         
         // 1. Store request globally for admin actions (MANDATORY)
@@ -774,9 +747,6 @@ bot.on("text", async (ctx) => {
       // Admin provided a reason, finalize decline
       await ctx.reply(`Reason received. Declining request ${refId} with comment...`, { reply_to_message_id: originalMessageId });
       
-      // Clear admin state immediately after receiving text
-      delete userStates[userId];
-
       // Trigger the final decline action with the provided reason
       return bot.handleUpdate({
           update_id: ctx.update.update_id,
