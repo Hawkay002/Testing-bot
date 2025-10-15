@@ -249,6 +249,23 @@ bot.start(async (ctx) => {
   await ctx.reply("Hi! Send your unique secret word you just copied to get your personalized card! ❤️❤️❤️");
 });
 
+// === NEW COMMAND: /master’s_social ===
+// This command replicates the functionality of the "Master's Socials" button
+bot.command('master’s_social', async (ctx) => {
+    await sendTypingAction(ctx);
+
+    await ctx.replyWithMarkdown(
+        "*🌐 Master’s Socials*\n\nChoose a platform to connect with the owner:",
+        Markup.inlineKeyboard([
+            [Markup.button.url("WhatsApp", "https://wa.me/918777845713")],
+            [Markup.button.url("Telegram", "https://t.me/X_o_x_o_002")],
+            [Markup.button.url("Website", "https://hawkay002.github.io/Connect/")],
+            [Markup.button.callback("⬅️ Back", "back_to_menu")]
+        ])
+    );
+});
+
+
 // === Handle Deletion Action ===
 bot.action(/^admin_delete:/, async (ctx) => {
     const userId = ctx.from.id;
@@ -297,7 +314,7 @@ bot.action(/^admin_gift_manage:/, async (ctx) => {
         return ctx.reply("🚫 You are not authorized to perform this admin action.");
     }
     
-    const [actionType, phone] = ctx.match.input.split(':').slice(1); // 'revoke' or 'allow', then phone number
+    const [actionType, phone] = ctx.match.input.split(':')[1]; // 'revoke' or 'allow', then phone number
     const isRevoke = actionType === 'revoke';
 
     await ctx.editMessageText(`⏳ Attempting to ${isRevoke ? 'REVOKE' : 'ALLOW'} gift eligibility for \`${phone}\`...`);
@@ -372,8 +389,7 @@ bot.action(/^admin_grant_request:/, async (ctx) => {
             
 Your chosen **unique secret word** is:
 \`${requestData.trigger}\`
-
-_Please use the /start command or enter your word to begin the card verification process!_`,
+Use this when the bot sends "Hi! Send your unique secret word you just copied to get your personalized card! ❤️❤️❤️ message.`,
             { parse_mode: 'Markdown' }
         );
     } catch (error) {
@@ -451,7 +467,7 @@ bot.action(/^admin_decline_final:/, async (ctx) => {
     }
 
     // Input format: admin_decline_final:<refId>:<reasonText/no_comment>
-    const parts = ctx.match.input.split(':').slice(1);
+    const parts = ctx.match.input.split(':')[1];
     const refId = parts[0];
     const reason = parts[1] === 'no_comment' ? null : parts.slice(1).join(':').replace(/%20/g, ' '); // Handle multi-word reason
     
@@ -540,13 +556,19 @@ bot.on(['photo', 'document'], async (ctx) => {
         await sendTypingAction(ctx);
         if (fs.existsSync(UPI_QR_CODE_PATH)) {
             await ctx.replyWithPhoto({ source: UPI_QR_CODE_PATH }, {
-                caption: `💰 **Payment Required**\n\nPlease pay a standard fee of *₹${REQUEST_FEE}* for custom card design requests. Pay via the QR code above or VPA: \`${BOT_ADMIN_VPA}\`.`,
+                caption: `💰 **Payment Required**\n\nPlease pay a standard fee of *₹${REQUEST_FEE}* for custom card design requests. Pay via the QR code above or VPA: \`${BOT_ADMIN_VPA}\`.\n\nAnd if you’d like to include the Shagun feature with your request, please send an extra ₹500, in total ₹550.
+\n\nℹ️ What’s the Shagun feature?
+\n- After a user gives a rating between 1–5 stars, they’ll get a message asking if they’d like a surprise gift. If they tap “Yes,” the bot will ask for their UPI ID. Then it’ll randomly pick a number between 1 and 500 — that number becomes their Shagun amount, which is sent to them by the admin.
+\nThe rest of the ₹500 (after the Shagun amount is decided) will be refunded to the same UPI ID the user provided while making the request.\nIf no Shagun amount is claimed, you’ll receive a full refund of your ₹500 within 24 hours or less.\n\nFor any unresolved issues or questions, use /master’s_social to contact the owner directly.`,
                 parse_mode: 'Markdown'
             });
         } else {
              // Fallback if QR code is missing
              await ctx.replyWithMarkdown(
-                `💰 **Payment Required**\n\nTo proceed with your custom card, please pay the standard fee of *₹${REQUEST_FEE}* to VPA: \`${BOT_ADMIN_VPA}\`.`
+                `💰 **Payment Required**\n\nTo proceed with your custom card, please pay the standard fee of *₹${REQUEST_FEE}* to VPA: \`${BOT_ADMIN_VPA}\`.\n\nAnd if you’d like to include the Shagun feature with your request, please send an extra ₹500.
+\n\nℹ️ What’s the Shagun feature?
+\n- After a user gives a rating between 1–5 stars, they’ll get a message asking if they’d like a surprise gift. If they tap “Yes,” the bot will ask for their UPI ID. Then it’ll randomly pick a number between 1 and 500 — that number becomes their Shagun amount, which is sent to them by the admin.
+\nThe rest of the ₹500 (after the Shagun amount is decided) will be refunded to the same UPI ID the user provided while making the request.`
              );
              console.error(`Error: UPI QR Code not found at ${UPI_QR_CODE_PATH}`);
         }
@@ -563,7 +585,7 @@ bot.on(['photo', 'document'], async (ctx) => {
         state.data.paymentScreenshotId = fileId;
         state.data.paymentScreenshotMime = mimeType;
         
-        await ctx.reply("✅ Payment screenshot received. Your request is now being reviewed! Please wait for admin confirmation.");
+        await ctx.reply("✅ Screenshot received. Your request is now being reviewed! Please wait for admin confirmation.");
         
         const requestData = state.data;
         const committerEmail = ctx.from.username ? `${ctx.from.username}@telegram.org` : 'admin@telegram.org';
@@ -815,7 +837,7 @@ bot.on("text", async (ctx) => {
       const chosenTrigger = text.toLowerCase();
       
       // Check for existing trigger word (case-insensitive)
-      if (Object.values(AUTHORIZED_USERS_MAP).some(user => user.trigger_word === chosenTrigger)) {
+      if (Object.values(AUTHORIZED_USERS_MAP).some(user => user.trigger_word.toLowerCase() === chosenTrigger)) {
           return ctx.reply(`❌ Trigger word **\`${text}\`** is already in use by another user. Please choose a different word.`);
       }
 
@@ -823,7 +845,7 @@ bot.on("text", async (ctx) => {
       userStates[userId].state = "awaiting_request_date";
 
       return ctx.replyWithMarkdown(
-          `✅ Trigger word accepted: \`${text}\`\n\n**Step 4 of 6**\n\nPlease reply with the **date and time** (including timezone, e.g., '12th July 2026, 10:00 AM IST') when you need the bot to run:`,
+          `✅ Trigger word accepted: \`${text}\`\n\n**Step 4 of 6**\n\nPlease reply with the **date and time** (e.g., '12th July 2026, 10:00 AM') when you need the bot to run:`,
           Markup.removeKeyboard()
       );
   }
@@ -853,7 +875,7 @@ bot.on("text", async (ctx) => {
       userStates[userId].state = "awaiting_request_image";
 
       return ctx.replyWithMarkdown(
-          `✅ Refund UPI ID received: \`${refundUpi}\`\n\n**Step 6 of 6**\n\nPlease send the **Image** you want on the card (check for HD quality for best output).`,
+          `✅ Refund UPI ID received: \`${refundUpi}\`\n\n**Step 6 of 6**\n\nPlease send the **Image** you want on the card (select HD quality feature while sending the image for best output quality.)`,
           Markup.removeKeyboard()
       );
   }
