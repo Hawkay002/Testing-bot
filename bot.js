@@ -49,7 +49,7 @@ const redirectLinkStore = {};
 const finalConfirmationMap = {};
 
 // Store pending custom requests for admin processing
-// refId -> { userId, name, phone, trigger, date, refundUpi, cardImageId, cardImageMime, cardImageCaption, paymentScreenshotId, paymentScreenshotMime }
+// refId -> { userId, name, phone, trigger, date, refundUpi, cardImageId, cardImageMime, cardImageCaption, paymentScreenshotId, paymentScreenshotMime, notificationMessageId }
 const pendingRequests = {};
 
 
@@ -338,6 +338,8 @@ bot.action(/^admin_gift_manage:/, async (ctx) => {
 // === NEW ADMIN ACTION: Grant Request ===
 bot.action(/^admin_grant_request:/, async (ctx) => {
     const adminId = ctx.from.id;
+    const messageId = ctx.callbackQuery.message.message_id; // The ID of the message with details/buttons
+    
     if (adminId !== ADMIN_CHAT_ID) {
         return ctx.reply("🚫 You are not authorized to perform this admin action.");
     }
@@ -346,10 +348,22 @@ bot.action(/^admin_grant_request:/, async (ctx) => {
     const requestData = pendingRequests[refId];
 
     if (!requestData) {
-        return ctx.editMessageText(`❌ Error: Request ID \`${refId}\` not found or expired.`, { parse_mode: 'Markdown' });
+        return ctx.reply(`❌ Error: Request ID \`${refId}\` not found or expired.`, { reply_to_message_id: messageId, parse_mode: 'Markdown' });
     }
     
-    await ctx.editMessageText(`✅ Request ${refId} granted. Notifying user.`, { parse_mode: 'Markdown' });
+    // 1. Acknowledge and mark the original message as processed (by removing buttons)
+    try {
+        await ctx.editMessageReplyMarkup(Markup.inlineKeyboard([
+            [Markup.button.callback(`✅ GRANTED (${requestData.name})`, 'ignore')]
+        ]).reply_markup);
+        
+        // 2. Reply to the original details message with the confirmation
+        await ctx.reply(`✅ Request ${refId} granted. Notifying user.`, { reply_to_message_id: messageId, parse_mode: 'Markdown' });
+    } catch (e) {
+        console.error("Error editing/replying to admin message for Grant:", e.message);
+        // Fallback reply if edit fails
+        await ctx.reply(`✅ Request ${refId} granted. Notifying user. (Original message edit failed)`);
+    }
 
     try {
         await ctx.telegram.sendMessage(
@@ -367,7 +381,7 @@ _Please use the /start command or enter your word to begin the card verification
          await ctx.reply(`❌ Failed to send confirmation to user ${requestData.userId}. They may have blocked the bot.`);
     }
 
-    // Inform the admin about the next crucial step
+    // 3. Inform the admin about the next crucial step
     await ctx.telegram.sendMessage(
         ADMIN_CHAT_ID,
         `🚨 **ACTION REQUIRED** 🚨
@@ -387,6 +401,8 @@ The system requires this manual GitHub commit step.`,
 // === NEW ADMIN ACTION: Decline Request - Initialization ===
 bot.action(/^admin_decline_init:/, async (ctx) => {
     const adminId = ctx.from.id;
+    const messageId = ctx.callbackQuery.message.message_id; // The ID of the message with details/buttons
+
     if (adminId !== ADMIN_CHAT_ID) {
         return ctx.reply("🚫 You are not authorized to perform this admin action.");
     }
@@ -395,22 +411,35 @@ bot.action(/^admin_decline_init:/, async (ctx) => {
     const requestData = pendingRequests[refId];
 
     if (!requestData) {
-        return ctx.editMessageText(`❌ Error: Request ID \`${refId}\` not found or expired.`, { parse_mode: 'Markdown' });
+        return ctx.reply(`❌ Error: Request ID \`${refId}\` not found or expired.`, { reply_to_message_id: messageId, parse_mode: 'Markdown' });
     }
     
     // Set admin state to awaiting decline reason
     userStates[adminId] = { 
         state: "awaiting_decline_reason", 
-        data: { refId: refId } 
+        data: { 
+            refId: refId,
+            originalMessageId: messageId // Store the ID of the details message for later reference
+        } 
     };
 
     const skipButton = Markup.inlineKeyboard([
         Markup.button.callback("Skip Comment & Decline", `admin_decline_final:${refId}:no_comment`)
     ]);
+    
+    // Acknowledge the decline button press by removing the buttons
+    try {
+        await ctx.editMessageReplyMarkup(Markup.inlineKeyboard([
+            [Markup.button.callback(`❌ DECLINING (${requestData.name})...`, 'ignore')]
+        ]).reply_markup);
+    } catch (e) {
+        console.error("Error editing message markup on Decline Init:", e.message);
+    }
 
-    await ctx.editMessageText(
-        `Please reply with the **reason** for declining request \`${refId}\`, or click the button to decline without a comment. The user's payment will be refunded to UPI ID: \`${requestData.refundUpi}\`.`,
-        { parse_mode: 'Markdown', ...skipButton }
+    // Reply to the original message to keep the context
+    await ctx.reply(
+        `Please reply with the **reason** for declining request \`${refId}\` to this message, or click the button below to decline without a comment. The user's payment will be refunded to UPI ID: \`${requestData.refundUpi}\`.`,
+        { parse_mode: 'Markdown', reply_to_message_id: messageId, ...skipButton }
     );
 });
 
@@ -428,14 +457,15 @@ bot.action(/^admin_decline_final:/, async (ctx) => {
     
     const requestData = pendingRequests[refId];
 
+    // Determine the message ID to reply to (either the original details message or the reason prompt)
+    let replyToId = ctx.callbackQuery?.message?.message_id; // Default to button message
+    if (userStates[adminId]?.data?.originalMessageId) {
+        // If coming from a text reply (handled below), use the original notification ID
+        replyToId = userStates[adminId].data.originalMessageId;
+    }
+    
     if (!requestData) {
-        // If coming from a text reply, ctx.editMessageText might fail if the original message was deleted/old
-        if (ctx.callbackQuery) {
-            await ctx.editMessageText(`❌ Error: Request ID \`${refId}\` not found or expired.`, { parse_mode: 'Markdown' });
-        } else {
-            await ctx.reply(`❌ Error: Request ID \`${refId}\` not found or expired.`);
-        }
-        return;
+        return ctx.reply(`❌ Error: Request ID \`${refId}\` not found or expired.`, { reply_to_message_id: replyToId, parse_mode: 'Markdown' });
     }
     
     let userMessage;
@@ -456,16 +486,12 @@ Your payment of ₹${REQUEST_FEE} will be refunded to your provided UPI ID (\`${
         );
     } catch (error) {
          console.error(`Error notifying user ${requestData.userId} of decline:`, error.message);
-         await ctx.reply(`❌ Failed to send decline message to user ${requestData.userId}. They may have blocked the bot.`);
+         await ctx.reply(`❌ Failed to send decline message to user ${requestData.userId}. They may have blocked the bot.`, { reply_to_message_id: replyToId });
     }
     
     const adminReplyText = `✅ Request ${refId} successfully declined. User notified and refund process initiated for \`${requestData.refundUpi}\`.`;
 
-    if (ctx.callbackQuery) {
-        await ctx.editMessageText(adminReplyText, { parse_mode: 'Markdown' });
-    } else {
-         await ctx.reply(adminReplyText, { parse_mode: 'Markdown' });
-    }
+    await ctx.reply(adminReplyText, { reply_to_message_id: replyToId, parse_mode: 'Markdown' });
 
     delete userStates[adminId]; // Clear admin state
     delete pendingRequests[refId]; // Remove request from pending list
@@ -575,14 +601,23 @@ Refund UPI: \`${requestData.refundUpi}\`
         ]);
         
         // 2. Send text notification and action buttons to main admin chat
-        await ctx.telegram.sendMessage(ADMIN_CHAT_ID, notificationText, { parse_mode: 'Markdown', ...adminKeyboard });
+        const sentMessage = await ctx.telegram.sendMessage(ADMIN_CHAT_ID, notificationText, { parse_mode: 'Markdown', ...adminKeyboard });
         
-        // 3. Send files to the admin chat (since there is no secondary bot)
-        await ctx.telegram.sendMessage(ADMIN_CHAT_ID, `**[REQ ${refId}] FILES FOR REVIEW:**\n\n1. **Card Image** (Attached below)\n2. **Payment Proof** (Attached below)`, { parse_mode: 'Markdown' });
+        // Save the notification message ID for reference/editing (buttons removal)
+        pendingRequests[refId].notificationMessageId = sentMessage.message_id;
+        
+        // 3. Send files to the admin chat 
+        await ctx.telegram.sendMessage(ADMIN_CHAT_ID, `**[REQ ${refId}] FILES FOR REVIEW:**\n\n1. **Card Image** (Attached below)\n2. **Payment Proof** (Attached below)`, { 
+            parse_mode: 'Markdown', 
+            reply_to_message_id: sentMessage.message_id // Reply to the details message
+        });
         
         // Send Card Image
         try {
-            await ctx.telegram.sendPhoto(ADMIN_CHAT_ID, requestData.cardImageId, { caption: `Card Image for ${requestData.name} (Ref ID: ${refId})` });
+            await ctx.telegram.sendPhoto(ADMIN_CHAT_ID, requestData.cardImageId, { 
+                caption: `Card Image for ${requestData.name} (Ref ID: ${refId})`,
+                reply_to_message_id: sentMessage.message_id
+            });
         } catch (e) {
              console.error(`Error sending Card Image to Admin: ${e.message}`);
              await ctx.telegram.sendMessage(ADMIN_CHAT_ID, `⚠️ Failed to send Card Image for ${refId}. File ID: \`${requestData.cardImageId}\``);
@@ -590,7 +625,10 @@ Refund UPI: \`${requestData.refundUpi}\`
 
         // Send Payment Screenshot
         try {
-            await ctx.telegram.sendPhoto(ADMIN_CHAT_ID, requestData.paymentScreenshotId, { caption: `Payment Proof for ${requestData.name} (Ref ID: ${refId})` });
+            await ctx.telegram.sendPhoto(ADMIN_CHAT_ID, requestData.paymentScreenshotId, { 
+                caption: `Payment Proof for ${requestData.name} (Ref ID: ${refId})`,
+                reply_to_message_id: sentMessage.message_id
+            });
         } catch (e) {
              console.error(`Error sending Payment Screenshot to Admin: ${e.message}`);
              await ctx.telegram.sendMessage(ADMIN_CHAT_ID, `⚠️ Failed to send Payment Screenshot for ${refId}. File ID: \`${requestData.paymentScreenshotId}\``);
@@ -682,15 +720,21 @@ bot.on("text", async (ctx) => {
   // --- ADMIN DECLINE REASON FLOW ---
   if (userId === ADMIN_CHAT_ID && currentState === "awaiting_decline_reason") {
       const refId = userStates[userId].data.refId;
+      const originalMessageId = userStates[userId].data.originalMessageId; // Get ID of the details message
+      
       // Admin provided a reason, finalize decline
-      await ctx.reply(`Reason received. Declining request ${refId} with comment...`);
+      await ctx.reply(`Reason received. Declining request ${refId} with comment...`, { reply_to_message_id: originalMessageId });
+      
       // Trigger the final decline action with the provided reason
       return bot.handleUpdate({
           update_id: ctx.update.update_id,
           callback_query: {
               id: `decline_reason_${Date.now()}`,
               from: ctx.from,
-              message: ctx.message,
+              message: { // Mock a callback message containing the original details message ID
+                  chat: { id: ADMIN_CHAT_ID },
+                  message_id: originalMessageId
+              },
               chat_instance: 'some_instance',
               data: `admin_decline_final:${refId}:${encodeURIComponent(text)}`
           }
@@ -1273,8 +1317,9 @@ bot.action(/^admin_init_pay:/, async (ctx) => {
         "✨ Payment initialization started, waiting for few minutes you'll soon receive your gift. 😊"
     );
     
+    // Edit the message to show processing/link, but keep the core details intact in the reply chain
     await ctx.editMessageText(
-        `🔗 *Payment Link for ₹${amount}* to \`${userUpi}\`\n\n**If the button fails, copy the VPA (\`${userUpi}\`) and pay manually.**`,
+        ctx.callbackQuery.message.text + `\n\n🔗 *Payment Link for ₹${amount}* to \`${userUpi}\`\n\n**If the button fails, copy the VPA (\`${userUpi}\`) and pay manually.**`,
         {
             parse_mode: 'Markdown',
             ...Markup.inlineKeyboard([
