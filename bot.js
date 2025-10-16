@@ -314,7 +314,12 @@ bot.action(/^admin_gift_manage:/, async (ctx) => {
         return ctx.reply("🚫 You are not authorized to perform this admin action.");
     }
     
-    const [actionType, phone] = ctx.match.input.split(':')[1]; // 'revoke' or 'allow', then phone number
+    // FIX: Correctly parse the callback data string.
+    // The original code `ctx.match.input.split(':')[1]` would only get the second part (e.g., 'revoke')
+    // and then incorrectly destructure it, causing `phone` to be a single letter (e.g., 'e').
+    const dataPart = ctx.match.input.substring('admin_gift_manage:'.length); // Gets "revoke:1234567890"
+    const [actionType, phone] = dataPart.split(':'); // Correctly splits into ["revoke", "1234567890"]
+
     const isRevoke = actionType === 'revoke';
 
     await ctx.editMessageText(`⏳ Attempting to ${isRevoke ? 'REVOKE' : 'ALLOW'} gift eligibility for \`${phone}\`...`);
