@@ -42,7 +42,7 @@ const BOT_ADMIN_VPA = "8777845713@upi";
 const bot = new Telegraf(TOKEN);
 
 // === Global State Tracking ===
-// user_id -> { state: "awaiting_contact" | "awaiting_upi" | "spinning" | "awaiting_request_..." | "awaiting_decline_reason" | null, data: { ... } }
+// user_id -> { state: "awaiting_contact" | "awaiting_upi" | "spinning" | "awaiting_request_..." | "awaiting_decline_reason" | "awaiting_edit_..." | null, data: { ... } }
 const userStates = {}; 
 const pendingGifts = {}; 
 const redirectLinkStore = {}; 
@@ -211,7 +211,7 @@ function isValidUpiId(upiId) {
     return /^[a-zA-Z0-9\.\-_]+@[a-zA-Z0-9\-]+$/.test(upiId.trim());
 }
 
-// === Admin Search Helper Function (used by /remove, /revoke, /allow) ===
+// === Admin Search Helper Function (used by /remove, /revoke, /allow, /edit) ===
 function searchUsers(query) {
     return Object.entries(AUTHORIZED_USERS_MAP)
         .filter(([phone, data]) => 
@@ -314,12 +314,7 @@ bot.action(/^admin_gift_manage:/, async (ctx) => {
         return ctx.reply("🚫 You are not authorized to perform this admin action.");
     }
     
-    // FIX: Correctly parse the callback data string.
-    // The original code `ctx.match.input.split(':')[1]` would only get the second part (e.g., 'revoke')
-    // and then incorrectly destructure it, causing `phone` to be a single letter (e.g., 'e').
-    const dataPart = ctx.match.input.substring('admin_gift_manage:'.length); // Gets "revoke:1234567890"
-    const [actionType, phone] = dataPart.split(':'); // Correctly splits into ["revoke", "1234567890"]
-
+    const [actionType, phone] = ctx.match.input.split(':')[1]; // 'revoke' or 'allow', then phone number
     const isRevoke = actionType === 'revoke';
 
     await ctx.editMessageText(`⏳ Attempting to ${isRevoke ? 'REVOKE' : 'ALLOW'} gift eligibility for \`${phone}\`...`);
@@ -356,6 +351,113 @@ bot.action(/^admin_gift_manage:/, async (ctx) => {
         await ctx.editMessageText(`❌ Failed to update gift status for **${userName}**: ${error.message}. Please check logs and GitHub status.`, { parse_mode: 'Markdown' });
     }
 });
+
+// === NEW: Handle User Edit Selection ===
+bot.action(/^admin_edit_select:(.*)$/, async (ctx) => {
+    const userId = ctx.from.id;
+    if (userId !== ADMIN_CHAT_ID) {
+        return ctx.reply("🚫 You are not authorized to perform this admin action.");
+    }
+    
+    const phoneToEdit = ctx.match[1];
+    const userData = AUTHORIZED_USERS_MAP[phoneToEdit];
+
+    if (!userData) {
+        return ctx.editMessageText(`❌ Error: User with phone number \`${phoneToEdit}\` not found. They may have been removed.`, { parse_mode: 'Markdown' });
+    }
+
+    const userDetailsText = `
+✏️ *Editing User:*
+Name: \`${userData.name}\`
+Phone: \`${phoneToEdit}\`
+Trigger: \`${userData.trigger_word}\`
+
+Select which field you want to change:
+    `;
+
+    const editKeyboard = Markup.inlineKeyboard([
+        [
+            Markup.button.callback("✏️ Name", `admin_edit_field:name:${phoneToEdit}`),
+            Markup.button.callback("📞 Number", `admin_edit_field:phone:${phoneToEdit}`),
+            Markup.button.callback("🔑 Trigger", `admin_edit_field:trigger:${phoneToEdit}`)
+        ],
+        [Markup.button.callback("⬅️ Cancel", "cancel_edit")]
+    ]);
+
+    await ctx.editMessageText(userDetailsText, { parse_mode: 'Markdown', ...editKeyboard });
+});
+
+// === NEW: Handle User Edit Field Selection (to set state) ===
+bot.action(/^admin_edit_field:(\w+):(.+)$/, async (ctx) => {
+    const adminId = ctx.from.id;
+    if (adminId !== ADMIN_CHAT_ID) {
+        return ctx.reply("🚫 You are not authorized to perform this admin action.");
+    }
+
+    const fieldToEdit = ctx.match[1]; // 'name', 'phone', or 'trigger'
+    const userPhone = ctx.match[2];
+    const userData = AUTHORIZED_USERS_MAP[userPhone];
+
+    if (!userData) {
+        return ctx.editMessageText(`❌ Error: User with phone \`${userPhone}\` no longer exists.`, { parse_mode: 'Markdown' });
+    }
+
+    let promptText = "";
+    let stateName = "";
+
+    switch(fieldToEdit) {
+        case 'name':
+            promptText = `Please send the new **Name** for the user (currently: \`${userData.name}\`).`;
+            stateName = "awaiting_edit_name";
+            break;
+        case 'phone':
+            promptText = `Please send the new 10-digit **Phone Number** for the user (currently: \`${userPhone}\`).`;
+            stateName = "awaiting_edit_phone";
+            break;
+        case 'trigger':
+            promptText = `Please send the new **Trigger Word** for the user (currently: \`${userData.trigger_word}\`).`;
+            stateName = "awaiting_edit_trigger";
+            break;
+        default:
+            return ctx.editMessageText("❌ Invalid edit field selected.");
+    }
+
+    // Set admin state to await the new value
+    userStates[adminId] = {
+        state: stateName,
+        data: {
+            originalPhone: userPhone
+        }
+    };
+    
+    // Edit the previous message to show we're waiting for input
+    await ctx.editMessageText(
+        ctx.callbackQuery.message.text + `\n\n*ACTION:*\n${promptText}`,
+        { 
+            parse_mode: 'Markdown',
+            ...Markup.inlineKeyboard([
+                [Markup.button.callback("❌ Cancel Edit", `cancel_state_edit:${adminId}`)]
+            ])
+        }
+    );
+});
+
+
+// === NEW: Handle Cancel Edit actions ===
+bot.action('cancel_edit', async (ctx) => {
+    if (ctx.from.id !== ADMIN_CHAT_ID) return;
+    await ctx.editMessageText("✏️ Edit operation cancelled.");
+});
+
+bot.action(/^cancel_state_edit:(\d+)$/, async (ctx) => {
+    const adminId = parseInt(ctx.match[1], 10);
+    if (ctx.from.id !== ADMIN_CHAT_ID || ctx.from.id !== adminId) {
+        return; // Silently ignore if not the right admin
+    }
+    delete userStates[adminId];
+    await ctx.editMessageText("✏️ Edit operation cancelled.");
+});
+
 
 // === NEW ADMIN ACTION: Grant Request ===
 bot.action(/^admin_grant_request:/, async (ctx) => {
@@ -762,6 +864,73 @@ bot.on("text", async (ctx) => {
   const currentState = userStates[userId]?.state;
   const isCommand = lowerText.startsWith('/');
   
+  // --- NEW: ADMIN EDIT FLOW ---
+  if (userId === ADMIN_CHAT_ID && currentState && currentState.startsWith('awaiting_edit_')) {
+      const { originalPhone } = userStates[userId].data;
+      const originalUserData = AUTHORIZED_USERS_MAP[originalPhone];
+      if (!originalUserData) {
+          delete userStates[userId];
+          return ctx.reply("❌ User data not found. The user might have been removed. Edit cancelled.");
+      }
+
+      const newAuthorizedUsers = { ...AUTHORIZED_USERS_MAP };
+      let updateField = '';
+      let newValue = text;
+      let successMessage = '';
+      
+      try {
+          switch (currentState) {
+              case "awaiting_edit_name":
+                  updateField = 'Name';
+                  newAuthorizedUsers[originalPhone].name = newValue;
+                  successMessage = `✅ Name for \`${originalPhone}\` updated to **${newValue}**.`;
+                  break;
+
+              case "awaiting_edit_phone":
+                  updateField = 'Phone Number';
+                  const phoneRegex = /^\d{10}$/;
+                  if (!phoneRegex.test(newValue)) {
+                      return ctx.reply("❌ Invalid phone number. Must be 10 digits. Please try again.");
+                  }
+                  if (AUTHORIZED_USERS_MAP[newValue]) {
+                      return ctx.reply(`❌ Phone number \`${newValue}\` is already in use. Please choose another.`);
+                  }
+                  // To change the phone number, we need to remove the old key and add the new one.
+                  const userData = newAuthorizedUsers[originalPhone];
+                  delete newAuthorizedUsers[originalPhone];
+                  newAuthorizedUsers[newValue] = userData;
+                  successMessage = `✅ Phone number for **${originalUserData.name}** updated from \`${originalPhone}\` to \`${newValue}\`.`;
+                  break;
+
+              case "awaiting_edit_trigger":
+                  updateField = 'Trigger Word';
+                  newValue = newValue.toLowerCase();
+                  if (Object.values(AUTHORIZED_USERS_MAP).some((user, phone) => user.trigger_word.toLowerCase() === newValue && phone !== originalPhone)) {
+                      return ctx.reply(`❌ Trigger word \`${newValue}\` is already in use. Please choose another.`);
+                  }
+                  newAuthorizedUsers[originalPhone].trigger_word = newValue;
+                  successMessage = `✅ Trigger word for **${originalUserData.name}** updated to \`${newValue}\`.`;
+                  break;
+          }
+
+          // Commit changes to GitHub
+          const committerEmail = ctx.from.username ? `${ctx.from.username}@telegram.org` : 'admin@telegram.org';
+          const commitMessage = `feat(bot): Edit ${updateField} for ${originalUserData.name} (${originalPhone}) via Telegram`;
+          await updateAuthorizedUsersOnGithub(newAuthorizedUsers, ctx.from.first_name, committerEmail, commitMessage);
+          
+          // Update local map and clear state
+          AUTHORIZED_USERS_MAP = newAuthorizedUsers;
+          delete userStates[userId];
+          
+          await ctx.replyWithMarkdown(successMessage + "\n\nChanges have been committed to GitHub.");
+
+      } catch (error) {
+          console.error("GitHub Edit Error:", error);
+          await ctx.reply(`❌ Failed to update user: ${error.message}. The edit was not saved.`);
+      }
+      return; // Stop further processing
+  }
+  
   // --- ADMIN DECLINE REASON FLOW ---
   if (userId === ADMIN_CHAT_ID && currentState === "awaiting_decline_reason") {
       const refId = userStates[userId].data.refId;
@@ -1025,6 +1194,40 @@ The new list is now live. Use \`/show\` to verify.`);
               matchText + "⚠️ *Select a user to permanently REMOVE them from the authorized list. This action is irreversible.*", 
               Markup.inlineKeyboard(rows)
           );
+          
+          return;
+      }
+      
+      // --- ADMIN COMMAND: /edit ---
+      if (lowerText.startsWith('/edit')) {
+          await sendTypingAction(ctx);
+          const query = text.slice('/edit'.length).trim();
+          
+          if (!query) {
+              return ctx.replyWithMarkdown("❌ Invalid command format. Use: `/edit <10-digit phone/partial name>`");
+          }
+
+          const matches = searchUsers(query);
+              
+          if (matches.length === 0) {
+              return ctx.replyWithMarkdown(`🔍 No users found matching: **\`${query}\`**`);
+          }
+
+          let matchText = `✏️ Found *${matches.length}* user(s) matching **\`${query}\`**. Select one to edit:\n\n`;
+          let keyboardButtons = [];
+
+          matches.forEach(([phone, data], index) => {
+              const matchId = index + 1;
+              const formattedName = data.name.replace(/([_*`[\]()])/g, '\\$1'); 
+              
+              matchText += `${matchId}. Name: *${formattedName}*\n   Phone: \`${phone}\`\n   Trigger: \`${data.trigger_word}\`\n\n`;
+              
+              keyboardButtons.push(Markup.button.callback(`Edit ${matchId} (${data.name})`, `admin_edit_select:${phone}`));
+          });
+          
+          const rows = keyboardButtons.map(btn => [btn]);
+          
+          await ctx.replyWithMarkdown(matchText, Markup.inlineKeyboard(rows));
           
           return;
       }
