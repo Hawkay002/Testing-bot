@@ -5,7 +5,8 @@
   },
   "8777845713": {
     "name": "Shovith Debnath (Admin)",
-    "trigger_word": "10/10/2002"
+    "trigger_word": "10/10/2002",
+    "can_claim_gift": false
   },
   "9903403883": {
     "name": "Shankar Debnath",
@@ -13,8 +14,7 @@
   },
   "8276829124": {
     "name": "Sikha Debnath",
-    "trigger_word": "sikhaji",
-    "can_claim_gift": false
+    "trigger_word": "sikhaji"
   },
   "6291539754": {
     "name": "Rinky (Tiyasha Debnath)",
