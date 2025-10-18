@@ -1,12 +1,15 @@
 {
   "name": "telegram-bot",
   "version": "1.0.0",
+  "description": "Telegram bot with a Mini App dashboard",
+  "main": "bot.js",
   "type": "module",
   "scripts": {
     "start": "node bot.js"
   },
   "dependencies": {
-    "telegraf": "^4.16.3",
-    "express": "^4.18.2"
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "telegraf": "^4.16.3"
   }
 }
