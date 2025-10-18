@@ -224,7 +224,6 @@
 
             const closeModal = () => userModal.style.display = 'none';
             
-            // DEFINITIVE FIX for the state update bug
             const handleApiAction = async (endpoint, method, body) => {
                 try {
                     const response = await fetch(`${API_BASE_URL}${endpoint}`, {
@@ -237,21 +236,17 @@
                     
                     showToast(result.message || 'Success!');
                     
-                    // If the API returns the updated user list, use it directly.
-                    // This eliminates the race condition.
                     if (result.users) {
                         users = result.users;
-                        renderUsers(searchInput.value); // Re-render with fresh data
+                        renderUsers(searchInput.value);
                     } else {
-                        // Fallback for actions that don't return a user list (like redeploy)
                         await fetchData();
                     }
                     return true;
                 } catch (error) {
                     showToast(error.message, 'danger');
                     tg.showAlert(`Error: ${error.message}`);
-                    // On failure, refresh state from server to ensure consistency
-                    await fetchData(); 
+                    await fetchData(); // On failure, resync with the server's master state
                     return false;
                 }
             };
@@ -264,7 +259,6 @@
                 tg.showConfirm('Are you sure you want to redeploy the bot? This will restart the service with the latest code from GitHub.', async (ok) => {
                     if (ok) {
                         showToast('Triggering redeploy...', 'info', 5000);
-                        // This action doesn't need a state update, the toast is enough feedback
                          try {
                             const response = await fetch(`${API_BASE_URL}/api/redeploy`, { method: 'POST' });
                             const result = await response.json();
