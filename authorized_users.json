@@ -58,7 +58,8 @@
   },
   "9073840913": {
     "name": "Anindya-kun(holesome)",
-    "trigger_word": "anindya"
+    "trigger_word": "anindya",
+    "can_claim_gift": false
   },
   "9382013068": {
     "name": "Priyam (Ryōta Watari)",
