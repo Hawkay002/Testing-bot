@@ -19,6 +19,7 @@ const GITHUB_REPO = process.env.GITHUB_REPO || 'Testing-bot';
 const GITHUB_FILE_PATH = process.env.GITHUB_FILE_PATH || 'authorized_users.json'; 
 const GITHUB_USERS_URL = `https://raw.githubusercontent.com/${GITHUB_OWNER}/${GITHUB_REPO}/main/${GITHUB_FILE_PATH}`;
 const BOT_PUBLIC_BASE_URL = process.env.RENDER_EXTERNAL_URL; 
+const RENDER_DEPLOY_HOOK = process.env.RENDER_DEPLOY_HOOK; // For the redeploy feature
 
 const IMAGE_PATH = "Wishing Birthday.jpg"; 
 const UPI_QR_CODE_PATH = "upi_qr_code.png"; 
@@ -49,7 +50,7 @@ const __dirname = path.dirname(__filename);
 app.use(express.static(path.join(__dirname, 'public')));
 
 
-// === GitHub Functions (from original, slightly modified for dashboard) ===
+// === GitHub Functions ===
 async function loadAuthorizedUsers() {
     console.log(`📡 Fetching authorized users from: ${GITHUB_USERS_URL}`);
     try {
@@ -117,7 +118,7 @@ async function updateAuthorizedUsersOnGithub(newContent, committerName, commitMe
 }
 
 // ===============================================
-// === NEW: MINI APP API ENDPOINTS ===
+// === MINI APP API ENDPOINTS ===
 // ===============================================
 
 app.get('/api/users', (req, res) => res.json(AUTHORIZED_USERS_MAP));
@@ -163,6 +164,25 @@ app.post('/api/user/gift', async (req, res) => {
         res.json({ message: `Gift access for ${phone} updated.` });
     } catch (error) { res.status(500).json({ error: error.message }); }
 });
+
+// NEW: Redeploy endpoint
+app.post('/api/redeploy', async (req, res) => {
+    if (!RENDER_DEPLOY_HOOK) {
+        return res.status(500).json({ error: "RENDER_DEPLOY_HOOK is not set on the server." });
+    }
+    try {
+        const response = await fetch(RENDER_DEPLOY_HOOK, { method: 'POST' });
+        if (response.ok) {
+            res.json({ message: "Redeploy triggered successfully! Please wait 1-3 minutes for changes to apply." });
+        } else {
+            const errorText = await response.text();
+            res.status(500).json({ error: `Failed to trigger redeploy hook. Status: ${response.status}. Error: ${errorText}` });
+        }
+    } catch (error) {
+        res.status(500).json({ error: `An error occurred while contacting the Render service: ${error.message}` });
+    }
+});
+
 
 // ===============================================
 // === ORIGINAL BOT LOGIC (PRESERVED) ===
@@ -306,46 +326,36 @@ bot.action(/^admin_decline_final:/, async (ctx) => {
     delete pendingRequests[refId];
 });
 
-// =========================================================================================
-// === THE ORIGINAL PHOTO/DOCUMENT HANDLER - UNMODIFIED AND RESTORED ===
-// =========================================================================================
 bot.on(['photo', 'document'], async (ctx) => {
     const userId = ctx.from.id;
-    const isPhoto = ctx.message.photo;
-    const isDocument = ctx.message.document;
-    
-    let fileId = null;
-    let caption = ctx.message.caption;
+    const state = userStates[userId];
+    if (!state || !state.state.startsWith('awaiting_request_')) return;
 
-    if (isPhoto) {
-        const photoArray = isPhoto;
-        fileId = photoArray[photoArray.length - 1].file_id;
-    } else if (isDocument && isDocument.mime_type?.startsWith('image')) {
-        fileId = isDocument.file_id;
+    let fileId;
+    if (ctx.message.photo) {
+        fileId = ctx.message.photo.slice(-1)[0].file_id;
+    } else if (ctx.message.document?.mime_type?.startsWith('image')) {
+        fileId = ctx.message.document.file_id;
     } else {
-        return; // Ignore non-image documents
+        return;
     }
 
-    const state = userStates[userId];
-    
-    // --- Step 6: Collect Card Image (awaiting_request_image) ---
-    if (state?.state === "awaiting_request_image") {
+    if (state.state === "awaiting_request_image") {
         await sendTypingAction(ctx);
         state.data.cardImageId = fileId;
-        state.data.cardImageCaption = caption || 'No caption provided';
+        state.data.cardImageCaption = ctx.message.caption || 'No caption';
         state.state = "awaiting_payment_screenshot";
         
         await ctx.reply("✅ Card Image received. Proceeding to payment step...");
-        await sendTypingAction(ctx);
         
         const captionHtml = `
 <b>💰 Payment Required</b>
 Please pay a standard fee of <i>₹${REQUEST_FEE}</i>. Pay via the QR code above or VPA: <code>${BOT_ADMIN_VPA}</code>.
 And if you would like to include the Shagun feature with your request, please send an extra ₹500 making a total of ₹550.
 ℹ️ What is the Shagun feature?
-- After a user gives a rating between 1–5 stars, they will get a message asking if they would like a surprise gift. If they tap “Yes”, the bot will ask for their UPI ID. Then it will randomly pick a number between 1 and 500 — that number becomes their Shagun amount, which is sent to them by the admin.
-The rest of the ₹500 (after the Shagun amount is decided) will be refunded to the same UPI ID the user provided while making the request.
-For any unresolved issues or questions, use /masters_social to contact the owner directly.`.trim();
+- After a user gives a rating, they will get a message asking if they would like a surprise gift. If they tap “Yes”, the bot will ask for their UPI ID. It will randomly pick a number between 1 and 500 — that number becomes their Shagun amount, sent by the admin.
+The rest of the ₹500 will be refunded to the same UPI ID.
+For any unresolved issues, use /masters_social.`.trim();
 
         if (fs.existsSync(UPI_QR_CODE_PATH)) {
             await ctx.replyWithPhoto({ source: UPI_QR_CODE_PATH }, { caption: captionHtml, parse_mode: 'HTML' });
@@ -353,12 +363,10 @@ For any unresolved issues or questions, use /masters_social to contact the owner
              await ctx.replyWithHTML(captionHtml);
         }
         
-        await sendTypingAction(ctx);
-        return ctx.replyWithMarkdown("💳 Once payment is successful, please reply to this chat with the **screenshot of your payment**.\n\n⚠️ **Payment has to be done within 7 days before 11:59pm IST.**");
+        return ctx.replyWithMarkdown("💳 Once payment is successful, please reply with the **screenshot of your payment**.\n\n⚠️ **Payment has to be done within 7 days before 11:59pm IST.**");
     }
     
-    // --- Step 7: Collect Payment Screenshot and Notify Admin Bot (awaiting_payment_screenshot) ---
-    if (state?.state === "awaiting_payment_screenshot") {
+    if (state.state === "awaiting_payment_screenshot") {
         await sendTypingAction(ctx);
         state.data.paymentScreenshotId = fileId;
         
@@ -385,9 +393,6 @@ Refund UPI: \`${requestData.refundUpi}\``.trim();
         ]);
         
         const sentMessage = await ctx.telegram.sendMessage(ADMIN_CHAT_ID, notificationText, { parse_mode: 'Markdown', ...adminKeyboard });
-        pendingRequests[refId].notificationMessageId = sentMessage.message_id;
-        
-        await ctx.telegram.sendMessage(ADMIN_CHAT_ID, `**[REQ ${refId}] FILES FOR REVIEW:**`, { parse_mode: 'Markdown', reply_to_message_id: sentMessage.message_id });
         
         await ctx.telegram.sendPhoto(ADMIN_CHAT_ID, requestData.cardImageId, { caption: `Card Image for ${requestData.name} (Ref ID: ${refId})`, reply_to_message_id: sentMessage.message_id });
         await ctx.telegram.sendPhoto(ADMIN_CHAT_ID, requestData.paymentScreenshotId, { caption: `Payment Proof for ${requestData.name} (Ref ID: ${refId})`, reply_to_message_id: sentMessage.message_id });
@@ -420,8 +425,8 @@ bot.on("contact", async (ctx) => {
             await sendTypingAction(ctx);
             await ctx.reply("🔐 Authenticating...");
             const confirmationKeyboard = Markup.inlineKeyboard([
-                Markup.button.callback("Yes, that's me!", "confirm_yes"),
-                Markup.button.callback("No, that's not me", "confirm_no")
+                [Markup.button.callback("Yes, that's me!", "confirm_yes")],
+                [Markup.button.callback("No, that's not me", "confirm_no")]
             ]);
             return ctx.replyWithMarkdown(`As per our database, are you *${potentialName}*?`, confirmationKeyboard);
         } else {
@@ -553,8 +558,8 @@ bot.action(/^rating_/, async (ctx) => {
   
   if (matchedPhone && AUTHORIZED_USERS_MAP[matchedPhone]?.can_claim_gift) {
     await ctx.replyWithMarkdown("Would you like a *bonus mystery gift*? 👀", Markup.inlineKeyboard([
-        Markup.button.callback("Yes, I want a gift! 🥳", "gift_yes"),
-        Markup.button.callback("No, thank you.", "gift_no"),
+        [Markup.button.callback("Yes, I want a gift! 🥳", "gift_yes")],
+        [Markup.button.callback("No, thank you.", "gift_no")],
     ]));
   } else {
     await ctx.reply("Thanks again for celebrating with us! 😊");
