@@ -42,7 +42,7 @@ const BOT_ADMIN_VPA = "8777845713@upi";
 const bot = new Telegraf(TOKEN);
 
 // === Global State Tracking ===
-// user_id -> { state: "awaiting_contact" | "awaiting_upi" | "spinning" | "awaiting_request_..." | "awaiting_decline_reason" | "awaiting_edit_..." | null, data: { ... } }
+// user_id -> { state: "awaiting_..." | null, data: { ... } }
 const userStates = {}; 
 const pendingGifts = {}; 
 const redirectLinkStore = {}; 
@@ -78,13 +78,10 @@ async function loadAuthorizedUsers() {
         
         // Update global state and normalize user data (add default can_claim_gift)
         if (typeof data === 'object' && data !== null && metadata.sha) {
-            // Apply default setting to existing users if the field is missing
             const normalizedData = Object.fromEntries(
                 Object.entries(data).map(([phone, userData]) => [
                     phone,
-                    // If can_claim_gift is explicitly set to false in the file, use it. 
-                    // Otherwise, default to true.
-                    { ...userData, can_claim_gift: userData.can_claim_gift === false ? false : true }
+                    { ...userData, can_claim_gift: userData.can_claim_gift !== false }
                 ])
             );
 
@@ -102,52 +99,28 @@ async function loadAuthorizedUsers() {
     }
 }
 
-// === Function to update the file content on GitHub (FIXED for gift status) ===
+// === Function to update the file content on GitHub ===
 async function updateAuthorizedUsersOnGithub(newContent, committerName, committerEmail, commitMessage) {
-    if (!GITHUB_TOKEN) {
-        throw new Error("GITHUB_TOKEN environment variable is not set.");
-    }
-    if (!GITHUB_FILE_SHA) {
-        throw new Error("Current file SHA is unknown. Cannot perform update.");
-    }
+    if (!GITHUB_TOKEN) throw new Error("GITHUB_TOKEN environment variable is not set.");
+    if (!GITHUB_FILE_SHA) throw new Error("Current file SHA is unknown. Cannot perform update.");
     
-    // 1. Clean up the content for the GitHub file before saving.
-    // We only explicitly save 'can_claim_gift: false'. If it's true or undefined, we omit the key.
     const contentToCommit = {};
     for (const [phone, userData] of Object.entries(newContent)) {
         const cleanedUserData = { ...userData };
-        
-        // Remove runtime-only properties
-        if (cleanedUserData.matchedPhone) {
-            delete cleanedUserData.matchedPhone;
-        }
-
-        // If the user is allowed (true), remove the key from the saved file (since 'true' is the default)
-        if (cleanedUserData.can_claim_gift === true) {
-            delete cleanedUserData.can_claim_gift;
-        } 
-        // If the user is revoked (false), the key/value pair remains in the object.
-
+        delete cleanedUserData.matchedPhone;
+        if (cleanedUserData.can_claim_gift === true) delete cleanedUserData.can_claim_gift;
         contentToCommit[phone] = cleanedUserData;
     }
     
-    // Base64 encode the new JSON content
     const contentEncoded = Buffer.from(JSON.stringify(contentToCommit, null, 2)).toString('base64');
-    
     const apiUrl = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${GITHUB_FILE_PATH}`;
-
     const payload = {
-        message: commitMessage, // Use the provided dynamic commit message
+        message: commitMessage,
         content: contentEncoded,
-        sha: GITHUB_FILE_SHA, // Must provide the current SHA for the update to work
-        committer: {
-            name: committerName,
-            email: committerEmail || 'telegram-bot@hawkay.com'
-        }
+        sha: GITHUB_FILE_SHA,
+        committer: { name: committerName, email: committerEmail || 'telegram-bot@hawkay.com' }
     };
     
-    console.log(`Attempting to update file at: ${apiUrl}`);
-
     const response = await fetch(apiUrl, {
         method: 'PUT',
         headers: {
@@ -160,7 +133,6 @@ async function updateAuthorizedUsersOnGithub(newContent, committerName, committe
 
     if (response.ok) {
         const result = await response.json();
-        // Update the SHA immediately for subsequent commits
         GITHUB_FILE_SHA = result.content.sha;
         console.log(`✅ GitHub update successful. New SHA: ${GITHUB_FILE_SHA}`);
         return true;
@@ -171,64 +143,48 @@ async function updateAuthorizedUsersOnGithub(newContent, committerName, committe
     }
 }
 
-// === NEW ADMIN FUNCTION: Trigger Render Redeploy ===
+// === ADMIN FUNCTION: Trigger Render Redeploy ===
 async function adminRedeployService(ctx) {
-    if (!RENDER_DEPLOY_HOOK) {
-        return ctx.reply("❌ RENDER_DEPLOY_HOOK is not set in environment variables. Cannot redeploy.");
-    }
-    
+    if (!RENDER_DEPLOY_HOOK) return ctx.reply("❌ RENDER_DEPLOY_HOOK is not set.");
     await ctx.reply("🚀 Attempting to trigger a service re-deploy on Render...");
-    
     try {
-        // Render Deploy Hooks accept POST requests to trigger a new deployment
-        const response = await fetch(RENDER_DEPLOY_HOOK, {
-            method: 'POST',
-        });
-
+        const response = await fetch(RENDER_DEPLOY_HOOK, { method: 'POST' });
         if (response.ok) {
-            await ctx.reply("✅ Deploy hook successfully triggered! Render should now be building and restarting the service. This may take 1-3 minutes.");
-            console.log("Render redeploy triggered successfully.");
+            await ctx.editMessageText("✅ Deploy hook successfully triggered! Render should now be restarting the service (1-3 mins).");
         } else {
             const errorText = await response.text();
             await ctx.reply(`❌ Failed to trigger deploy hook. Status: ${response.status}. Error: ${errorText}`);
-            console.error(`Render redeploy failed: ${response.status} - ${errorText}`);
         }
     } catch (error) {
-        console.error("Error during redeploy fetch:", error);
-        await ctx.reply(`❌ An error occurred while contacting the Render service: ${error.message}`);
+        await ctx.reply(`❌ An error occurred while contacting Render: ${error.message}`);
     }
 }
 
 // === Helper to send typing indicator ===
 async function sendTypingAction(ctx) {
     await ctx.replyWithChatAction('typing');
-    // A short delay to make the typing indicator feel more natural
     await new Promise(r => setTimeout(r, 600));
 }
 
-// Helper for basic UPI ID validation (VPA format: name.handle@bank)
 function isValidUpiId(upiId) {
     return /^[a-zA-Z0-9\.\-_]+@[a-zA-Z0-9\-]+$/.test(upiId.trim());
 }
 
-// === Admin Search Helper Function (used by /remove, /revoke, /allow, /edit) ===
 function searchUsers(query) {
+    const lowerQuery = query.toLowerCase();
     return Object.entries(AUTHORIZED_USERS_MAP)
         .filter(([phone, data]) => 
-            phone.includes(query) || data.name.toLowerCase().includes(query.toLowerCase())
+            phone.includes(query) || data.name.toLowerCase().includes(lowerQuery)
         );
 }
 
-// === Keep-Alive Server (for hosting platforms like Render) ===
+// === Keep-Alive Server ===
 const app = express();
 app.get('/pay-redirect', (req, res) => {
     const { id } = req.query;
     const upiLink = redirectLinkStore[id];
-    if (upiLink) {
-        res.redirect(302, upiLink);
-    } else {
-        res.status(404).send('Link expired or not found.');
-    }
+    if (upiLink) res.redirect(302, upiLink);
+    else res.status(404).send('Link expired or not found.');
 });
 app.get("/", (req, res) => res.send("✅ Bot server is alive and running!"));
 const PORT = process.env.PORT || 10000;
@@ -249,11 +205,9 @@ bot.start(async (ctx) => {
   await ctx.reply("Hi! Send your unique secret word you just copied to get your personalized card! ❤️❤️❤️");
 });
 
-// === NEW COMMAND: /master’s_social ===
-// This command replicates the functionality of the "Master's Socials" button
+// === /masters_social Command ===
 bot.command('masters_social', async (ctx) => {
     await sendTypingAction(ctx);
-
     await ctx.replyWithMarkdown(
         "*🌐 Master’s Socials*\n\nChoose a platform to connect with the owner:",
         Markup.inlineKeyboard([
@@ -265,1356 +219,689 @@ bot.command('masters_social', async (ctx) => {
     );
 });
 
+// ===============================================
+// === NEW: ADMIN CONTROL PANEL (START) ===
+// ===============================================
+
+// --- Keyboards ---
+const adminMainMenu = Markup.inlineKeyboard([
+    [Markup.button.callback("👤 User Management", "admin_usermgmt")],
+    [Markup.button.callback("⚙️ System & Bot", "admin_system")],
+    [Markup.button.callback("❌ Close Panel", "admin_close")]
+]);
+
+const userManagementMenu = Markup.inlineKeyboard([
+    [
+        Markup.button.callback("➕ Add New User", "admin_adduser_start"),
+        Markup.button.callback("✏️ Edit User Info", "admin_edituser_start")
+    ],
+    [
+        Markup.button.callback("🗑️ Remove User", "admin_removeuser_start"),
+        Markup.button.callback("✨ Manage Gift Access", "admin_giftaccess_start")
+    ],
+    [Markup.button.callback("📋 List All Users", "admin_list_users")],
+    [Markup.button.callback("⬅️ Back to Main Menu", "admin_main")]
+]);
+
+const systemMenu = Markup.inlineKeyboard([
+    [Markup.button.callback("📊 Bot Status", "admin_status")],
+    [Markup.button.callback("🚀 Redeploy Service", "admin_redeploy")],
+    [Markup.button.callback("⬅️ Back to Main Menu", "admin_main")]
+]);
+
+// --- /admin Command: Entry Point ---
+bot.command('admin', async (ctx) => {
+    if (ctx.from.id !== ADMIN_CHAT_ID) return;
+    await sendTypingAction(ctx);
+    await ctx.replyWithMarkdown("Welcome to the *Admin Control Panel*. Please choose an option:", adminMainMenu);
+});
+
+// --- Main Navigation ---
+bot.action('admin_main', async (ctx) => ctx.editMessageText("Welcome to the *Admin Control Panel*. Please choose an option:", { parse_mode: 'Markdown', ...adminMainMenu }));
+bot.action('admin_usermgmt', async (ctx) => ctx.editMessageText("*👤 User Management*\n\nSelect an action to perform.", { parse_mode: 'Markdown', ...userManagementMenu }));
+bot.action('admin_system', async (ctx) => ctx.editMessageText("*⚙️ System & Bot*\n\nSelect an action.", { parse_mode: 'Markdown', ...systemMenu }));
+bot.action('admin_close', async (ctx) => ctx.editMessageText("Admin panel closed."));
+
+// --- System Menu Actions ---
+bot.action('admin_status', async (ctx) => {
+    const uptimeSeconds = Math.floor((Date.now() - START_TIME) / 1000);
+    const hours = Math.floor(uptimeSeconds / 3600);
+    const minutes = Math.floor((uptimeSeconds % 3600) / 60);
+    const seconds = uptimeSeconds % 60;
+    const uptimeStr = `${hours}h ${minutes}m ${seconds}s`;
+    const userCount = Object.keys(AUTHORIZED_USERS_MAP).length;
+
+    await ctx.editMessageText(
+        `*📊 Bot Status*\n\nUptime: \`${uptimeStr}\`\nAuthorized Users: \`${userCount}\``,
+        { parse_mode: 'Markdown', ...Markup.inlineKeyboard([Markup.button.callback("⬅️ Back", "admin_system")]) }
+    );
+});
+bot.action('admin_redeploy', async (ctx) => {
+    await ctx.editMessageText("Triggering redeploy...", { parse_mode: 'Markdown' });
+    await adminRedeployService(ctx);
+});
+
+// --- User Management Actions ---
+bot.action('admin_list_users', async (ctx) => {
+    await ctx.editMessageText("Fetching user list...", { parse_mode: 'Markdown' });
+    if (Object.keys(AUTHORIZED_USERS_MAP).length === 0) {
+        return ctx.reply("The authorized user list is currently empty.");
+    }
+    const userList = Object.entries(AUTHORIZED_USERS_MAP)
+        .map(([phone, data], index) => {
+            const giftStatus = data.can_claim_gift ? '✅' : '🚫';
+            return `${index + 1}. ${giftStatus} *${data.name}* (\`${phone}\`) -> \`${data.trigger_word}\``;
+        }).join('\n');
+    const header = `👤 *Authorized Users List* (${Object.keys(AUTHORIZED_USERS_MAP).length} total):\n\n`;
+    await ctx.replyWithMarkdown(header + userList);
+    await ctx.answerCbQuery("List sent as a new message.");
+});
+
+// --- User Management Guided Flows (using userStates) ---
+bot.action(['admin_adduser_start', 'admin_edituser_start', 'admin_removeuser_start', 'admin_giftaccess_start'], async (ctx) => {
+    const action = ctx.match[0];
+    let state = '';
+    let prompt = '';
+
+    switch (action) {
+        case 'admin_adduser_start':
+            state = 'awaiting_admin_add_phone';
+            prompt = "Okay, let's add a new user.\n\nFirst, please reply with their **10-digit phone number**.";
+            userStates[ADMIN_CHAT_ID] = { state, data: {} };
+            break;
+        case 'admin_edituser_start':
+            state = 'awaiting_admin_search_for_edit';
+            prompt = "✏️ Who do you want to edit?\n\nPlease reply with their **name or phone number** to search.";
+            userStates[ADMIN_CHAT_ID] = { state, data: {} };
+            break;
+        case 'admin_removeuser_start':
+            state = 'awaiting_admin_search_for_remove';
+            prompt = "🗑️ Who do you want to remove?\n\nPlease reply with their **name or phone number** to search.";
+            userStates[ADMIN_CHAT_ID] = { state, data: {} };
+            break;
+        case 'admin_giftaccess_start':
+            state = 'awaiting_admin_search_for_gift';
+            prompt = "✨ Who do you want to manage gift access for?\n\nPlease reply with their **name or phone number** to search.";
+            userStates[ADMIN_CHAT_ID] = { state, data: {} };
+            break;
+    }
+    
+    await ctx.editMessageText(prompt, {
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard([Markup.button.callback("❌ Cancel", "admin_cancel_state")])
+    });
+});
+
+// Action to cancel any state-based admin operation
+bot.action('admin_cancel_state', async (ctx) => {
+    delete userStates[ADMIN_CHAT_ID];
+    await ctx.editMessageText("*Operation cancelled.* Returning to User Management.", {
+        parse_mode: 'Markdown', ...userManagementMenu
+    });
+});
+
+// ===============================================
+// === NEW: ADMIN CONTROL PANEL (END) ===
+// ===============================================
+
 
 // === Handle Deletion Action ===
 bot.action(/^admin_delete:/, async (ctx) => {
-    const userId = ctx.from.id;
-    if (userId !== ADMIN_CHAT_ID) {
-        return ctx.reply("🚫 You are not authorized to perform this admin action.");
-    }
-    
     const phoneToDelete = ctx.match.input.split(':')[1];
-    
-    // Clear the message to show processing
-    await ctx.editMessageText(`⏳ Attempting to delete user with phone number: \`${phoneToDelete}\`...`);
-    
+    await ctx.editMessageText(`⏳ Deleting user \`${phoneToDelete}\`...`, { parse_mode: 'Markdown' });
     if (!AUTHORIZED_USERS_MAP[phoneToDelete]) {
-        return ctx.editMessageText(`❌ Error: User with phone number \`${phoneToDelete}\` not found in the current list.`, { parse_mode: 'Markdown' });
+        return ctx.editMessageText(`❌ Error: User \`${phoneToDelete}\` not found.`, { parse_mode: 'Markdown' });
     }
-
     const userName = AUTHORIZED_USERS_MAP[phoneToDelete].name;
-    
     try {
-        // 1. Prepare new data structure (delete the property)
         const newAuthorizedUsers = { ...AUTHORIZED_USERS_MAP };
         delete newAuthorizedUsers[phoneToDelete];
-        
-        // 2. Update the file on GitHub
-        const committerEmail = ctx.from.username ? `${ctx.from.username}@telegram.org` : 'admin@telegram.org';
-        const commitMessage = `feat(bot): Remove user ${userName} (${phoneToDelete}) via Telegram`;
-
-        await updateAuthorizedUsersOnGithub(newAuthorizedUsers, ctx.from.first_name, committerEmail, commitMessage);
-        
-        // 3. Update the local map immediately
+        const commitMessage = `feat(bot): Remove user ${userName} (${phoneToDelete}) via Admin Panel`;
+        await updateAuthorizedUsersOnGithub(newAuthorizedUsers, ctx.from.first_name, null, commitMessage);
         AUTHORIZED_USERS_MAP = newAuthorizedUsers;
-        
-        await ctx.editMessageText(`✅ User **${userName}** (\`${phoneToDelete}\`) successfully removed from the authorized list and committed to GitHub!`, { parse_mode: 'Markdown' });
-        
+        await ctx.editMessageText(`✅ User **${userName}** (\`${phoneToDelete}\`) removed.`, { parse_mode: 'Markdown' });
     } catch (error) {
-        console.error("GitHub Deletion Error:", error);
-        await ctx.editMessageText(`❌ Failed to remove user **${userName}**: ${error.message}. Please check logs and GitHub status.`, { parse_mode: 'Markdown' });
+        await ctx.editMessageText(`❌ Failed to remove **${userName}**: ${error.message}.`, { parse_mode: 'Markdown' });
     }
 });
 
 
 // === Handle Gift Eligibility Management Actions (Revoke/Allow) ===
-bot.action(/^admin_gift_manage:/, async (ctx) => {
-    const userId = ctx.from.id;
-    if (userId !== ADMIN_CHAT_ID) {
-        return ctx.reply("🚫 You are not authorized to perform this admin action.");
-    }
-    
-    const [actionType, phone] = ctx.match.input.split(':')[1]; // 'revoke' or 'allow', then phone number
+bot.action(/^admin_gift_manage:(revoke|allow):(.+)$/, async (ctx) => {
+    const actionType = ctx.match[1];
+    const phone = ctx.match[2];
     const isRevoke = actionType === 'revoke';
-
-    await ctx.editMessageText(`⏳ Attempting to ${isRevoke ? 'REVOKE' : 'ALLOW'} gift eligibility for \`${phone}\`...`);
-    
+    await ctx.editMessageText(`⏳ Attempting to **${actionType.toUpperCase()}** gift eligibility for \`${phone}\`...`, { parse_mode: 'Markdown' });
     if (!AUTHORIZED_USERS_MAP[phone]) {
-        return ctx.editMessageText(`❌ Error: User with phone number \`${phone}\` not found in the current list.`, { parse_mode: 'Markdown' });
+        return ctx.editMessageText(`❌ Error: User \`${phone}\` not found.`, { parse_mode: 'Markdown' });
     }
-
     const userName = AUTHORIZED_USERS_MAP[phone].name;
-    const newStatus = !isRevoke; // false for revoke, true for allow
-    
+    const newStatus = !isRevoke;
     try {
-        // 1. Prepare new data structure (update the property)
         const newAuthorizedUsers = { ...AUTHORIZED_USERS_MAP };
-        newAuthorizedUsers[phone] = {
-            ...newAuthorizedUsers[phone],
-            can_claim_gift: newStatus // Set to true for allow, false for revoke
-        };
-        
-        // 2. Update the file on GitHub
-        const committerEmail = ctx.from.username ? `${ctx.from.username}@telegram.org` : 'admin@telegram.org';
+        newAuthorizedUsers[phone] = { ...newAuthorizedUsers[phone], can_claim_gift: newStatus };
         const statusText = newStatus ? 'allowed' : 'revoked';
-        const commitMessage = `feat(bot): Gift eligibility ${statusText} for ${userName} (${phone}) via Telegram`;
-
-        await updateAuthorizedUsersOnGithub(newAuthorizedUsers, ctx.from.first_name, committerEmail, commitMessage);
-        
-        // 3. Update the local map immediately
+        const commitMessage = `feat(bot): Gift eligibility ${statusText} for ${userName} (${phone}) via Admin Panel`;
+        await updateAuthorizedUsersOnGithub(newAuthorizedUsers, ctx.from.first_name, null, commitMessage);
         AUTHORIZED_USERS_MAP = newAuthorizedUsers;
-        
-        await ctx.editMessageText(`✅ Gift eligibility for **${userName}** (\`${phone}\`) has been **${statusText.toUpperCase()}** and committed to GitHub!`, { parse_mode: 'Markdown' });
-        
+        await ctx.editMessageText(`✅ Gift eligibility for **${userName}** (\`${phone}\`) has been **${statusText.toUpperCase()}**.`, { parse_mode: 'Markdown' });
     } catch (error) {
-        console.error("GitHub Gift Management Error:", error);
-        await ctx.editMessageText(`❌ Failed to update gift status for **${userName}**: ${error.message}. Please check logs and GitHub status.`, { parse_mode: 'Markdown' });
+        await ctx.editMessageText(`❌ Failed to update gift status for **${userName}**: ${error.message}.`, { parse_mode: 'Markdown' });
     }
 });
 
-// === NEW: Handle User Edit Selection ===
+// === Handle User Edit Selection ===
 bot.action(/^admin_edit_select:(.*)$/, async (ctx) => {
-    const userId = ctx.from.id;
-    if (userId !== ADMIN_CHAT_ID) {
-        return ctx.reply("🚫 You are not authorized to perform this admin action.");
-    }
-    
     const phoneToEdit = ctx.match[1];
     const userData = AUTHORIZED_USERS_MAP[phoneToEdit];
-
     if (!userData) {
-        return ctx.editMessageText(`❌ Error: User with phone number \`${phoneToEdit}\` not found. They may have been removed.`, { parse_mode: 'Markdown' });
+        return ctx.editMessageText(`❌ Error: User \`${phoneToEdit}\` not found.`, { parse_mode: 'Markdown' });
     }
-
-    const userDetailsText = `
-✏️ *Editing User:*
-Name: \`${userData.name}\`
-Phone: \`${phoneToEdit}\`
-Trigger: \`${userData.trigger_word}\`
-
-Select which field you want to change:
-    `;
-
+    const userDetailsText = `✏️ *Editing User:*\nName: \`${userData.name}\`\nPhone: \`${phoneToEdit}\`\nTrigger: \`${userData.trigger_word}\`\n\nSelect which field to change:`;
     const editKeyboard = Markup.inlineKeyboard([
         [
             Markup.button.callback("✏️ Name", `admin_edit_field:name:${phoneToEdit}`),
             Markup.button.callback("📞 Number", `admin_edit_field:phone:${phoneToEdit}`),
             Markup.button.callback("🔑 Trigger", `admin_edit_field:trigger:${phoneToEdit}`)
         ],
-        [Markup.button.callback("⬅️ Cancel", "cancel_edit")]
+        [Markup.button.callback("⬅️ Back to Search", "admin_edituser_start")]
     ]);
-
     await ctx.editMessageText(userDetailsText, { parse_mode: 'Markdown', ...editKeyboard });
 });
 
-// === NEW: Handle User Edit Field Selection (to set state) ===
+// === Handle User Edit Field Selection (to set state) ===
 bot.action(/^admin_edit_field:(\w+):(.+)$/, async (ctx) => {
-    const adminId = ctx.from.id;
-    if (adminId !== ADMIN_CHAT_ID) {
-        return ctx.reply("🚫 You are not authorized to perform this admin action.");
-    }
-
-    const fieldToEdit = ctx.match[1]; // 'name', 'phone', or 'trigger'
+    const fieldToEdit = ctx.match[1];
     const userPhone = ctx.match[2];
     const userData = AUTHORIZED_USERS_MAP[userPhone];
-
-    if (!userData) {
-        return ctx.editMessageText(`❌ Error: User with phone \`${userPhone}\` no longer exists.`, { parse_mode: 'Markdown' });
-    }
-
+    if (!userData) return ctx.editMessageText(`❌ Error: User with phone \`${userPhone}\` no longer exists.`, { parse_mode: 'Markdown' });
     let promptText = "";
     let stateName = "";
-
     switch(fieldToEdit) {
         case 'name':
-            promptText = `Please send the new **Name** for the user (currently: \`${userData.name}\`).`;
+            promptText = `Please send the new **Name** (current: \`${userData.name}\`).`;
             stateName = "awaiting_edit_name";
             break;
         case 'phone':
-            promptText = `Please send the new 10-digit **Phone Number** for the user (currently: \`${userPhone}\`).`;
+            promptText = `Please send the new 10-digit **Phone Number** (current: \`${userPhone}\`).`;
             stateName = "awaiting_edit_phone";
             break;
         case 'trigger':
-            promptText = `Please send the new **Trigger Word** for the user (currently: \`${userData.trigger_word}\`).`;
+            promptText = `Please send the new **Trigger Word** (current: \`${userData.trigger_word}\`).`;
             stateName = "awaiting_edit_trigger";
             break;
-        default:
-            return ctx.editMessageText("❌ Invalid edit field selected.");
+        default: return ctx.editMessageText("❌ Invalid edit field.");
     }
-
-    // Set admin state to await the new value
-    userStates[adminId] = {
-        state: stateName,
-        data: {
-            originalPhone: userPhone
-        }
-    };
-    
-    // Edit the previous message to show we're waiting for input
+    userStates[ADMIN_CHAT_ID] = { state: stateName, data: { originalPhone: userPhone } };
     await ctx.editMessageText(
         ctx.callbackQuery.message.text + `\n\n*ACTION:*\n${promptText}`,
-        { 
-            parse_mode: 'Markdown',
-            ...Markup.inlineKeyboard([
-                [Markup.button.callback("❌ Cancel Edit", `cancel_state_edit:${adminId}`)]
-            ])
-        }
+        { parse_mode: 'Markdown', ...Markup.inlineKeyboard([[Markup.button.callback("❌ Cancel Edit", "admin_cancel_state")]]) }
     );
-});
-
-
-// === NEW: Handle Cancel Edit actions ===
-bot.action('cancel_edit', async (ctx) => {
-    if (ctx.from.id !== ADMIN_CHAT_ID) return;
-    await ctx.editMessageText("✏️ Edit operation cancelled.");
-});
-
-bot.action(/^cancel_state_edit:(\d+)$/, async (ctx) => {
-    const adminId = parseInt(ctx.match[1], 10);
-    if (ctx.from.id !== ADMIN_CHAT_ID || ctx.from.id !== adminId) {
-        return; // Silently ignore if not the right admin
-    }
-    delete userStates[adminId];
-    await ctx.editMessageText("✏️ Edit operation cancelled.");
 });
 
 
 // === NEW ADMIN ACTION: Grant Request ===
 bot.action(/^admin_grant_request:/, async (ctx) => {
-    const adminId = ctx.from.id;
-    const messageId = ctx.callbackQuery.message.message_id; // The ID of the message with details/buttons
-    
-    if (adminId !== ADMIN_CHAT_ID) {
-        return ctx.reply("🚫 You are not authorized to perform this admin action.");
-    }
-
     const refId = ctx.match.input.split(':')[1];
     const requestData = pendingRequests[refId];
-
-    if (!requestData) {
-        return ctx.reply(`❌ Error: Request ID \`${refId}\` not found or expired.`, { reply_to_message_id: messageId, parse_mode: 'Markdown' });
-    }
-    
-    // 1. Acknowledge and mark the original message as processed (by removing buttons)
+    if (!requestData) return ctx.reply(`❌ Error: Request ID \`${refId}\` not found.`);
     try {
-        await ctx.editMessageReplyMarkup(Markup.inlineKeyboard([
-            [Markup.button.callback(`✅ GRANTED (${requestData.name})`, 'ignore')]
-        ]).reply_markup);
-        
-        // 2. Reply to the original details message with the confirmation
-        await ctx.reply(`✅ Request ${refId} granted. Notifying user.`, { reply_to_message_id: messageId, parse_mode: 'Markdown' });
+        await ctx.editMessageReplyMarkup(Markup.inlineKeyboard([[Markup.button.callback(`✅ GRANTED (${requestData.name})`, 'ignore')]]).reply_markup);
+        await ctx.reply(`✅ Request ${refId} granted. Notifying user.`, { reply_to_message_id: ctx.callbackQuery.message.message_id });
     } catch (e) {
-        console.error("Error editing/replying to admin message for Grant:", e.message);
-        // Fallback reply if edit fails
-        await ctx.reply(`✅ Request ${refId} granted. Notifying user. (Original message edit failed)`);
+        await ctx.reply(`✅ Request ${refId} granted. Notifying user.`);
     }
-
     try {
-        await ctx.telegram.sendMessage(
-            requestData.userId,
-            `🎉 **SUCCESS!** Your custom card request has been approved and payment verified.
-            
-Your chosen **unique secret word** is:
-\`${requestData.trigger}\`
-Use this when the bot sends "Hi! Send your unique secret word you just copied to get your personalized card! ❤️❤️❤️ message.
-
-If you’re requesting it on someone else’s behalf, share this link with them along with the trigger word.
-https://t.me/Wish\\_ind\\_bot`,
-            { parse_mode: 'Markdown' }
-        );
+        await ctx.telegram.sendMessage(requestData.userId, `🎉 **SUCCESS!** Your custom card request has been approved.\n\nYour chosen **unique secret word** is:\n\`${requestData.trigger}\`\n\nShare this link with them along with the trigger word.\nhttps://t.me/Wish\\_ind\\_bot`, { parse_mode: 'Markdown' });
     } catch (error) {
-         console.error(`Error notifying user ${requestData.userId}:`, error.message);
-         await ctx.reply(`❌ Failed to send confirmation to user ${requestData.userId}. They may have blocked the bot.`);
+         await ctx.reply(`❌ Failed to send confirmation to user ${requestData.userId}.`);
     }
-
-    // 3. Inform the admin about the next crucial step
-    await ctx.telegram.sendMessage(
-        ADMIN_CHAT_ID,
-        `🚨 **ACTION REQUIRED** 🚨
-        
-User \`${requestData.userId}\` for Ref ID **\`${refId}\`** has been notified.
-        
-You must now manually add this user to \`authorized_users.json\` using the \`/add\` command:
-E.g., \`/add ${requestData.phone}, ${requestData.name}, ${requestData.trigger}\`
-
-The system requires this manual GitHub commit step.`,
-        { parse_mode: 'Markdown' }
-    );
-    
-    delete pendingRequests[refId]; // Remove request from pending list
+    await ctx.telegram.sendMessage(ADMIN_CHAT_ID, `🚨 **ACTION REQUIRED** 🚨\n\nUser for Ref ID **\`${refId}\`** has been notified.\n\nYou must now manually add this user to \`authorized_users.json\`.\nE.g., \`/add ${requestData.phone}, ${requestData.name}, ${requestData.trigger}\``, { parse_mode: 'Markdown' });
+    delete pendingRequests[refId];
 });
 
 // === NEW ADMIN ACTION: Decline Request - Initialization ===
 bot.action(/^admin_decline_init:/, async (ctx) => {
-    const adminId = ctx.from.id;
-    const messageId = ctx.callbackQuery.message.message_id; // The ID of the message with details/buttons
-
-    if (adminId !== ADMIN_CHAT_ID) {
-        return ctx.reply("🚫 You are not authorized to perform this admin action.");
-    }
-
     const refId = ctx.match.input.split(':')[1];
     const requestData = pendingRequests[refId];
-
-    if (!requestData) {
-        return ctx.reply(`❌ Error: Request ID \`${refId}\` not found or expired.`, { reply_to_message_id: messageId, parse_mode: 'Markdown' });
-    }
-    
-    // Set admin state to awaiting decline reason
-    userStates[adminId] = { 
-        state: "awaiting_decline_reason", 
-        data: { 
-            refId: refId,
-            originalMessageId: messageId // Store the ID of the details message for later reference
-        } 
-    };
-
-    const skipButton = Markup.inlineKeyboard([
-        Markup.button.callback("Skip Comment & Decline", `admin_decline_final:${refId}:no_comment`)
-    ]);
-    
-    // Acknowledge the decline button press by removing the buttons
+    if (!requestData) return ctx.reply(`❌ Error: Request ID \`${refId}\` not found.`);
+    userStates[ADMIN_CHAT_ID] = { state: "awaiting_decline_reason", data: { refId, originalMessageId: ctx.callbackQuery.message.message_id } };
     try {
-        await ctx.editMessageReplyMarkup(Markup.inlineKeyboard([
-            [Markup.button.callback(`❌ DECLINING (${requestData.name})...`, 'ignore')]
-        ]).reply_markup);
-    } catch (e) {
-        console.error("Error editing message markup on Decline Init:", e.message);
-    }
-
-    // Reply to the original message to keep the context
+        await ctx.editMessageReplyMarkup(Markup.inlineKeyboard([[Markup.button.callback(`❌ DECLINING (${requestData.name})...`, 'ignore')]]).reply_markup);
+    } catch (e) { console.error(e) }
     await ctx.reply(
-        `Please reply with the **reason** for declining request \`${refId}\` to this message, or click the button below to decline without a comment. The user's payment will be refunded to UPI ID: \`${requestData.refundUpi}\`.`,
-        { parse_mode: 'Markdown', reply_to_message_id: messageId, ...skipButton }
+        `Please reply with the **reason** for declining request \`${refId}\`, or click below to decline without a comment. Refund UPI: \`${requestData.refundUpi}\`.`,
+        { parse_mode: 'Markdown', reply_to_message_id: ctx.callbackQuery.message.message_id, ...Markup.inlineKeyboard([Markup.button.callback("Skip Comment & Decline", `admin_decline_final:${refId}:no_comment`)]) }
     );
 });
 
-// === NEW ADMIN ACTION: Decline Request - Finalization (from button or text) ===
+// === NEW ADMIN ACTION: Decline Request - Finalization ===
 bot.action(/^admin_decline_final:/, async (ctx) => {
-    const adminId = ctx.from.id;
-    if (adminId !== ADMIN_CHAT_ID) {
-        return ctx.reply("🚫 You are not authorized to perform this admin action.");
-    }
-
-    // Input format: admin_decline_final:<refId>:<reasonText/no_comment>
     const parts = ctx.match.input.split(':');
     const refId = parts[1];
-    // Reconstruct reason, handling cases where it was part of the button data
     const reason = parts.length > 2 && parts[2] !== 'no_comment' ? parts.slice(2).join(':').replace(/%20/g, ' ') : null;
-    
     const requestData = pendingRequests[refId];
-
-    // Determine the message ID to reply to (either the original details message or the reason prompt)
-    let replyToId = ctx.callbackQuery?.message?.message_id; // Default to button message
-    if (userStates[adminId]?.data?.originalMessageId) {
-        // If coming from a text reply (handled below), use the original notification ID
-        replyToId = userStates[adminId].data.originalMessageId;
-    }
-    
-    if (!requestData) {
-        return ctx.reply(`❌ Error: Request ID \`${refId}\` not found or expired.`, { reply_to_message_id: replyToId, parse_mode: 'Markdown' });
-    }
-    
-    let userMessage;
-    if (reason) {
-        userMessage = `❌ **Your request has been declined.**
-Reason: *${reason}* Your payment of ₹${REQUEST_FEE} will be refunded to your provided UPI ID (\`${requestData.refundUpi}\`) within 24 hours or less.`;
-    } else {
-        userMessage = `❌ **Your request has been declined.**
-        
-Your payment of ₹${REQUEST_FEE} will be refunded to your provided UPI ID (\`${requestData.refundUpi}\`) within 24 hours or less.`;
-    }
-
+    let replyToId = ctx.callbackQuery?.message?.message_id;
+    if (userStates[ADMIN_CHAT_ID]?.data?.originalMessageId) replyToId = userStates[ADMIN_CHAT_ID].data.originalMessageId;
+    if (!requestData) return ctx.reply(`❌ Error: Request ID \`${refId}\` not found.`, { reply_to_message_id: replyToId });
+    let userMessage = reason
+        ? `❌ **Your request has been declined.**\nReason: *${reason}* Your payment of ₹${REQUEST_FEE} will be refunded to \`${requestData.refundUpi}\` within 24 hours.`
+        : `❌ **Your request has been declined.** Your payment of ₹${REQUEST_FEE} will be refunded to \`${requestData.refundUpi}\` within 24 hours.`;
     try {
-        await ctx.telegram.sendMessage(
-            requestData.userId,
-            userMessage,
-            { parse_mode: 'Markdown' }
-        );
+        await ctx.telegram.sendMessage(requestData.userId, userMessage, { parse_mode: 'Markdown' });
     } catch (error) {
-         console.error(`Error notifying user ${requestData.userId} of decline:`, error.message);
-         await ctx.reply(`❌ Failed to send decline message to user ${requestData.userId}. They may have blocked the bot.`, { reply_to_message_id: replyToId });
+         await ctx.reply(`❌ Failed to send decline message to user ${requestData.userId}.`, { reply_to_message_id: replyToId });
     }
-    
-    const adminReplyText = `✅ Request ${refId} successfully declined. User notified and refund process initiated for \`${requestData.refundUpi}\`.`;
-
-    await ctx.reply(adminReplyText, { reply_to_message_id: replyToId, parse_mode: 'Markdown' });
-
-    delete userStates[adminId]; // Clear admin state
-    delete pendingRequests[refId]; // Remove request from pending list
+    await ctx.reply(`✅ Request ${refId} declined. User notified. Refund for \`${requestData.refundUpi}\` initiated.`, { reply_to_message_id: replyToId });
+    delete userStates[ADMIN_CHAT_ID];
+    delete pendingRequests[refId];
 });
-
 
 // === Handle Photo/Document Messages (Image Collection & Payment Screenshot) ===
 bot.on(['photo', 'document'], async (ctx) => {
     const userId = ctx.from.id;
-    const isPhoto = ctx.message.photo;
-    const isDocument = ctx.message.document;
+    if (!userStates[userId] || !userStates[userId].state.startsWith('awaiting_request_')) return;
     
-    // Determine the file ID and type
-    let fileId = null;
-    let mimeType = null;
-    let caption = ctx.message.caption;
-
-    if (isPhoto) {
-        // Get the largest photo size
-        const photoArray = isPhoto;
+    let fileId, mimeType;
+    if (ctx.message.photo) {
+        const photoArray = ctx.message.photo;
         fileId = photoArray[photoArray.length - 1].file_id;
         mimeType = 'image/jpeg';
-    } else if (isDocument && isDocument.mime_type?.startsWith('image')) {
-        fileId = isDocument.file_id;
-        mimeType = isDocument.mime_type;
-    } else if (isDocument) {
-        // Ignore non-image documents for this flow
-        return;
-    } else {
-        return;
-    }
+    } else if (ctx.message.document?.mime_type?.startsWith('image')) {
+        fileId = ctx.message.document.file_id;
+        mimeType = ctx.message.document.mime_type;
+    } else return;
 
     const state = userStates[userId];
     
-    // --- Step 6: Collect Card Image (awaiting_request_image) ---
-    if (state?.state === "awaiting_request_image") {
+    // --- Collect Card Image ---
+    if (state.state === "awaiting_request_image") {
         await sendTypingAction(ctx);
         state.data.cardImageId = fileId;
-        state.data.cardImageCaption = caption || 'No caption provided';
+        state.data.cardImageCaption = ctx.message.caption || 'No caption';
         state.data.cardImageMime = mimeType;
         state.state = "awaiting_payment_screenshot";
         
-        await ctx.reply("✅ Card Image received. Proceeding to payment step...");
-
-        // Send UPI QR Code
+        await ctx.reply("✅ Card Image received. Proceeding to payment...");
         await sendTypingAction(ctx);
-        if (fs.existsSync(UPI_QR_CODE_PATH)) {
-            // FIX: Switched to parse_mode: 'HTML' for the complex caption to avoid Markdown parsing errors
-            const captionHtml = `
-<b>💰 Payment Required</b>
 
-Please pay a standard fee of <i>₹${REQUEST_FEE}</i> for custom card design requests. Pay via the QR code above or VPA: <code>${BOT_ADMIN_VPA}</code>.
-
-And if you would like to include the Shagun feature with your request, please send an extra ₹500 making a total of ₹550.
-
-ℹ️ What is the Shagun feature?
-
-- After a user gives a rating between 1–5 stars, they will get a message asking if they would like a surprise gift. If they tap “Yes”, the bot will ask for their UPI ID. Then it will randomly pick a number between 1 and 500 — that number becomes their Shagun amount, which is sent to them by the admin.
-
-The rest of the ₹500 (after the Shagun amount is decided) will be refunded to the same UPI ID the user provided while making the request.
-If no Shagun amount is claimed, you will receive a full refund of your ₹500 within 24 hours or less.
-
-For any unresolved issues or questions, use /masters_social to contact the owner directly.
-            `.trim(); // Using trim() to clean up leading/trailing whitespace
-
-            await ctx.replyWithPhoto({ source: UPI_QR_CODE_PATH }, {
-                caption: captionHtml,
-                parse_mode: 'HTML' // <-- FIX: Changed from 'Markdown' to 'HTML'
-            });
-        } else {
-             // Fallback if QR code is missing (kept original Markdown for the fallback)
-             await ctx.replyWithMarkdown(
-                `💰 **Payment Required**\n\nTo proceed with your custom card, please pay the standard fee of *₹${REQUEST_FEE}* to VPA: \`${BOT_ADMIN_VPA}\`.\n\nAnd if you’d like to include the Shagun feature with your request, please send an extra ₹500.
-\n\nℹ️ What’s the Shagun feature?
-\n- After a user gives a rating between 1–5 stars, they’ll get a message asking if they’d like a surprise gift. If they tap “Yes,” the bot will ask for their UPI ID. Then it’ll randomly pick a number between 1 and 500 — that number becomes their Shagun amount, which is sent to them by the admin.
-\nThe rest of the ₹500 (after the Shagun amount is decided) will be refunded to the same UPI ID the user provided while making the request.`
-             );
-             console.error(`Error: UPI QR Code not found at ${UPI_QR_CODE_PATH}`);
-        }
+        const captionHtml = `<b>💰 Payment Required</b>\n\nPlease pay <i>₹${REQUEST_FEE}</i> for custom card requests via QR code or VPA: <code>${BOT_ADMIN_VPA}</code>.\n\nOptionally add ₹500 for the Shagun feature (total ₹550).\n\nℹ️ The Shagun amount (₹1-₹500) will be gifted to the user, and the remainder refunded to you.`;
         
-        await sendTypingAction(ctx);
-        return ctx.replyWithMarkdown(
-            "💳 Once payment is successful, please reply to this chat with the **screenshot of your payment**.\n\n⚠️ **Payment has to be done within 7 days before 11:59pm IST or the fee will be increased later.**"
-        );
+        if (fs.existsSync(UPI_QR_CODE_PATH)) {
+            await ctx.replyWithPhoto({ source: UPI_QR_CODE_PATH }, { caption: captionHtml, parse_mode: 'HTML' });
+        } else {
+            await ctx.replyWithHTML(captionHtml);
+        }
+        return ctx.replyWithMarkdown("💳 Once paid, please send the **payment screenshot**.");
     }
     
-    // --- Step 7: Collect Payment Screenshot and Notify Admin Bot (awaiting_payment_screenshot) ---
-    if (state?.state === "awaiting_payment_screenshot") {
+    // --- Collect Payment Screenshot ---
+    if (state.state === "awaiting_payment_screenshot") {
         await sendTypingAction(ctx);
         state.data.paymentScreenshotId = fileId;
         state.data.paymentScreenshotMime = mimeType;
         
-        await ctx.reply("✅ Screenshot received. Your request is now being reviewed! Please wait for admin confirmation.");
+        await ctx.reply("✅ Screenshot received. Your request is now being reviewed!");
         
-        const requestData = state.data;
+        const { name, phone, trigger, date, refundUpi, cardImageId, cardImageCaption, paymentScreenshotId } = state.data;
         const refId = `REQ${Date.now()}`;
         
-        // 1. Store request globally for admin actions (MANDATORY)
-        pendingRequests[refId] = {
-            userId: userId,
-            name: requestData.name,
-            phone: requestData.phone,
-            trigger: requestData.trigger.toLowerCase(),
-            date: requestData.date,
-            refundUpi: requestData.refundUpi,
-            cardImageId: requestData.cardImageId,
-            cardImageMime: requestData.cardImageMime,
-            cardImageCaption: requestData.cardImageCaption,
-            paymentScreenshotId: requestData.paymentScreenshotId,
-            paymentScreenshotMime: requestData.paymentScreenshotMime,
-        };
+        pendingRequests[refId] = { userId, name, phone, trigger: trigger.toLowerCase(), date, refundUpi, cardImageId, cardImageCaption, paymentScreenshotId };
 
-        const notificationText = `
-🔔 *NEW CUSTOM CARD REQUEST PENDING* 🔔
-Ref ID: \`${refId}\`
-User ID: \`${userId}\`
-Name: **${requestData.name}**
-Phone: \`${requestData.phone}\`
-Date Needed: \`${requestData.date}\`
-Trigger Word: \`${requestData.trigger}\`
-Refund UPI: \`${requestData.refundUpi}\`
-        `;
+        const notificationText = `🔔 *NEW CUSTOM CARD REQUEST*\nRef ID: \`${refId}\`\nUser ID: \`${userId}\`\nName: **${name}**\nPhone: \`${phone}\`\nDate: \`${date}\`\nTrigger: \`${trigger}\`\nRefund UPI: \`${refundUpi}\``;
         
         const adminKeyboard = Markup.inlineKeyboard([
             [Markup.button.callback("✅ Grant Request", `admin_grant_request:${refId}`)],
             [Markup.button.callback("❌ Decline Request", `admin_decline_init:${refId}`)],
         ]);
         
-        // 2. Send text notification and action buttons to main admin chat
         const sentMessage = await ctx.telegram.sendMessage(ADMIN_CHAT_ID, notificationText, { parse_mode: 'Markdown', ...adminKeyboard });
-        
-        // Save the notification message ID for reference/editing (buttons removal)
         pendingRequests[refId].notificationMessageId = sentMessage.message_id;
         
-        // 3. Send files to the admin chat 
-        await ctx.telegram.sendMessage(ADMIN_CHAT_ID, `**[REQ ${refId}] FILES FOR REVIEW:**\n\n1. **Card Image** (Attached below)\n2. **Payment Proof** (Attached below)`, { 
-            parse_mode: 'Markdown', 
-            reply_to_message_id: sentMessage.message_id // Reply to the details message
-        });
+        await ctx.telegram.sendPhoto(ADMIN_CHAT_ID, cardImageId, { caption: `Card Image for ${name} (Ref: ${refId})` });
+        await ctx.telegram.sendPhoto(ADMIN_CHAT_ID, paymentScreenshotId, { caption: `Payment Proof for ${name} (Ref: ${refId})` });
         
-        // Send Card Image
-        try {
-            await ctx.telegram.sendPhoto(ADMIN_CHAT_ID, requestData.cardImageId, { 
-                caption: `Card Image for ${requestData.name} (Ref ID: ${refId})`,
-                reply_to_message_id: sentMessage.message_id
-            });
-        } catch (e) {
-             console.error(`Error sending Card Image to Admin: ${e.message}`);
-             await ctx.telegram.sendMessage(ADMIN_CHAT_ID, `⚠️ Failed to send Card Image for ${refId}. File ID: \`${requestData.cardImageId}\``);
-        }
-
-        // Send Payment Screenshot
-        try {
-            await ctx.telegram.sendPhoto(ADMIN_CHAT_ID, requestData.paymentScreenshotId, { 
-                caption: `Payment Proof for ${requestData.name} (Ref ID: ${refId})`,
-                reply_to_message_id: sentMessage.message_id
-            });
-        } catch (e) {
-             console.error(`Error sending Payment Screenshot to Admin: ${e.message}`);
-             await ctx.telegram.sendMessage(ADMIN_CHAT_ID, `⚠️ Failed to send Payment Screenshot for ${refId}. File ID: \`${requestData.paymentScreenshotId}\``);
-        }
-        
-        delete userStates[userId]; // Clear state after submission
-        return;
+        delete userStates[userId];
     }
 });
 
 
-// === Handle Contact Messages (Updated for flow steps) ===
+// === Handle Contact Messages ===
 bot.on("contact", async (ctx) => {
   const userId = ctx.from.id;
+  const state = userStates[userId];
   const contact = ctx.message.contact;
+  const fullPhone = contact.phone_number.replace(/\D/g, "");
+  const normalizedNumber = fullPhone.slice(-10);
 
-  // --- NEW: Handle Request Phone Collection via Contact Share ---
-  if (contact && userStates[userId]?.state === "awaiting_request_phone") {
+  // --- Request Phone Collection ---
+  if (state?.state === "awaiting_request_phone") {
       await sendTypingAction(ctx);
-      // Store last 10 digits as normalized phone number
-      const fullPhone = contact.phone_number.replace(/\D/g, "");
-      userStates[userId].data.phone = fullPhone.slice(-10); // Use 'phone' key for the request data
-      userStates[userId].state = "awaiting_request_trigger";
-      
-      return ctx.replyWithMarkdown(
-          `✅ Phone received: \`${userStates[userId].data.phone}\`\n\n**Step 3 of 6**\n\nPlease reply with the **unique trigger word** (letters, numbers, or symbols) you want for your bot:`,
-          Markup.removeKeyboard() // Remove the contact keyboard
-      );
+      state.data.phone = normalizedNumber;
+      state.state = "awaiting_request_trigger";
+      return ctx.replyWithMarkdown(`✅ Phone: \`${state.data.phone}\`\n\n**Step 3/6**\nPlease reply with the **unique trigger word** for your bot:`, Markup.removeKeyboard());
   }
   
-  // --- (existing verification logic continues) ---
-  if (contact && userStates[userId]?.state === "awaiting_contact") {
-    const { potentialPhoneNumber, potentialName } = userStates[userId].data || {};
-
-    userStates[userId].state = null;
+  // --- Verification logic ---
+  if (state?.state === "awaiting_contact") {
+    const { potentialPhoneNumber, potentialName } = state.data;
+    state.state = null;
     
-    // Normalize the user's phone number: remove all non-digits and take the last 10 digits
-    const userNumberRaw = contact.phone_number.replace(/\D/g, "");
-    const normalizedNumber = userNumberRaw.slice(-10);
-    
-    const isVerificationSuccessful = (
-        normalizedNumber === potentialPhoneNumber && 
-        AUTHORIZED_USERS_MAP[normalizedNumber]
-    );
-
-    if (isVerificationSuccessful) {
-      userStates[userId].data.matchedName = potentialName;
-      userStates[userId].data.matchedPhone = normalizedNumber; // Store phone for gift check later
-      
-      await sendTypingAction(ctx);
-      await ctx.reply("📞 Checking back with your number...");
-      await new Promise((r) => setTimeout(r, 1000));
+    if (normalizedNumber === potentialPhoneNumber && AUTHORIZED_USERS_MAP[normalizedNumber]) {
+      state.data.matchedName = potentialName;
+      state.data.matchedPhone = normalizedNumber;
       
       await sendTypingAction(ctx);
       await ctx.reply("🔐 Authenticating...");
-      await new Promise((r) => setTimeout(r, 1000));
       
       const confirmationKeyboard = Markup.inlineKeyboard([
           Markup.button.callback("Yes, that's me!", "confirm_yes"),
           Markup.button.callback("No, that's not me", "confirm_no")
       ]);
-
-      await sendTypingAction(ctx);
-      await ctx.replyWithMarkdown(
-        `As per matches found in database, are you *${potentialName}*?`,
-        confirmationKeyboard
-      );
+      return ctx.replyWithMarkdown(`As per matches found, are you *${potentialName}*?`, confirmationKeyboard);
     } else {
-      await sendTypingAction(ctx);
-      await ctx.reply("🚫 Sorry! The shared contact number does not match the person associated with the secret word. Authorization failed.");
+      return ctx.reply("🚫 The shared contact number does not match. Authorization failed.");
     }
-  } else if (contact) {
-      await sendTypingAction(ctx);
-      await ctx.reply("I already have your contact, please continue with the flow or send your unique trigger word again.");
   }
 });
 
 
 // === Handle Text Messages (Core Logic) ===
 bot.on("text", async (ctx) => {
-  const userId = ctx.from.id;
-  const text = ctx.message.text.trim();
-  const lowerText = text.toLowerCase();
-
-  // --- 0. Command/Flow Check ---
-  const currentState = userStates[userId]?.state;
-  const isCommand = lowerText.startsWith('/');
+    const userId = ctx.from.id;
+    const text = ctx.message.text.trim();
+    const lowerText = text.toLowerCase();
+    const currentState = userStates[userId]?.state;
+    const isCommand = lowerText.startsWith('/');
   
-  // --- NEW: ADMIN EDIT FLOW ---
-  if (userId === ADMIN_CHAT_ID && currentState && currentState.startsWith('awaiting_edit_')) {
-      const { originalPhone } = userStates[userId].data;
-      const originalUserData = AUTHORIZED_USERS_MAP[originalPhone];
-      if (!originalUserData) {
-          delete userStates[userId];
-          return ctx.reply("❌ User data not found. The user might have been removed. Edit cancelled.");
-      }
+    // --- ADMIN STATE-BASED ACTIONS ---
+    if (userId === ADMIN_CHAT_ID && currentState && currentState.startsWith('awaiting_admin_')) {
+        const adminState = userStates[ADMIN_CHAT_ID];
+        switch (adminState.state) {
+            case 'awaiting_admin_add_phone':
+                const phoneRegex = /^\d{10}$/;
+                if (!phoneRegex.test(text)) return ctx.reply("❌ Invalid format. Please send a 10-digit number.");
+                if (AUTHORIZED_USERS_MAP[text]) return ctx.reply(`❌ Phone number \`${text}\` already exists.`);
+                adminState.data.phone = text;
+                adminState.state = 'awaiting_admin_add_name';
+                return ctx.reply("✅ Phone number saved. Now, please send the user's **full name**.");
 
-      const newAuthorizedUsers = { ...AUTHORIZED_USERS_MAP };
-      let updateField = '';
-      let newValue = text;
-      let successMessage = '';
-      
-      try {
-          switch (currentState) {
-              case "awaiting_edit_name":
-                  updateField = 'Name';
-                  newAuthorizedUsers[originalPhone].name = newValue;
-                  successMessage = `✅ Name for \`${originalPhone}\` updated to **${newValue}**.`;
-                  break;
+            case 'awaiting_admin_add_name':
+                adminState.data.name = text;
+                adminState.state = 'awaiting_admin_add_trigger';
+                return ctx.reply("✅ Name saved. Now, please send the **unique trigger word**.");
 
-              case "awaiting_edit_phone":
-                  updateField = 'Phone Number';
-                  const phoneRegex = /^\d{10}$/;
-                  if (!phoneRegex.test(newValue)) {
-                      return ctx.reply("❌ Invalid phone number. Must be 10 digits. Please try again.");
-                  }
-                  if (AUTHORIZED_USERS_MAP[newValue]) {
-                      return ctx.reply(`❌ Phone number \`${newValue}\` is already in use. Please choose another.`);
-                  }
-                  // To change the phone number, we need to remove the old key and add the new one.
-                  const userData = newAuthorizedUsers[originalPhone];
-                  delete newAuthorizedUsers[originalPhone];
-                  newAuthorizedUsers[newValue] = userData;
-                  successMessage = `✅ Phone number for **${originalUserData.name}** updated from \`${originalPhone}\` to \`${newValue}\`.`;
-                  break;
+            case 'awaiting_admin_add_trigger':
+                const trigger = lowerText;
+                if (Object.values(AUTHORIZED_USERS_MAP).some(u => u.trigger_word.toLowerCase() === trigger)) {
+                    return ctx.reply(`❌ Trigger word \`${trigger}\` is already in use. Please choose another.`);
+                }
+                adminState.data.trigger = trigger;
+                const { phone, name } = adminState.data;
+                delete userStates[ADMIN_CHAT_ID]; // Clear state before confirmation
 
-              case "awaiting_edit_trigger":
-                  updateField = 'Trigger Word';
-                  newValue = newValue.toLowerCase();
-                  if (Object.values(AUTHORIZED_USERS_MAP).some((user, phone) => user.trigger_word.toLowerCase() === newValue && phone !== originalPhone)) {
-                      return ctx.reply(`❌ Trigger word \`${newValue}\` is already in use. Please choose another.`);
-                  }
-                  newAuthorizedUsers[originalPhone].trigger_word = newValue;
-                  successMessage = `✅ Trigger word for **${originalUserData.name}** updated to \`${newValue}\`.`;
-                  break;
-          }
-
-          // Commit changes to GitHub
-          const committerEmail = ctx.from.username ? `${ctx.from.username}@telegram.org` : 'admin@telegram.org';
-          const commitMessage = `feat(bot): Edit ${updateField} for ${originalUserData.name} (${originalPhone}) via Telegram`;
-          await updateAuthorizedUsersOnGithub(newAuthorizedUsers, ctx.from.first_name, committerEmail, commitMessage);
-          
-          // Update local map and clear state
-          AUTHORIZED_USERS_MAP = newAuthorizedUsers;
-          delete userStates[userId];
-          
-          await ctx.replyWithMarkdown(successMessage + "\n\nChanges have been committed to GitHub.");
-
-      } catch (error) {
-          console.error("GitHub Edit Error:", error);
-          await ctx.reply(`❌ Failed to update user: ${error.message}. The edit was not saved.`);
-      }
-      return; // Stop further processing
-  }
-  
-  // --- ADMIN DECLINE REASON FLOW ---
-  if (userId === ADMIN_CHAT_ID && currentState === "awaiting_decline_reason") {
-      const refId = userStates[userId].data.refId;
-      const originalMessageId = userStates[userId].data.originalMessageId; // Get ID of the details message
-      
-      // Admin provided a reason, finalize decline
-      await ctx.reply(`Reason received. Declining request ${refId} with comment...`, { reply_to_message_id: originalMessageId });
-      
-      // Trigger the final decline action with the provided reason
-      return bot.handleUpdate({
-          update_id: ctx.update.update_id,
-          callback_query: {
-              id: `decline_reason_${Date.now()}`,
-              from: ctx.from,
-              message: { // Mock a callback message containing the original details message ID
-                  chat: { id: ADMIN_CHAT_ID },
-                  message_id: originalMessageId
-              },
-              chat_instance: 'some_instance',
-              data: `admin_decline_final:${refId}:${encodeURIComponent(text)}`
-          }
-      });
-  }
-
-
-  // --- USER COMMAND: /reset ---
-  if (lowerText === '/reset') {
-      await sendTypingAction(ctx);
-      delete userStates[userId];
-      
-      await ctx.replyWithMarkdown(
-          "🧹 **Memory cleared!** Your current session has been reset. You can now start over.",
-          Markup.removeKeyboard()
-      );
-      return bot.start(ctx);
-  }
-  
-  // --- USER COMMAND: /request ---
-  if (lowerText === '/request') {
-      await sendTypingAction(ctx);
-      
-      // Start the multi-step request form
-      userStates[userId] = { 
-          state: "awaiting_request_name", 
-          data: {} 
-      };
-
-      return ctx.replyWithMarkdown(
-          "📝 **Custom Card Request Form: Step 1 of 6**\n\nPlease reply with your **Full Name** for the card.",
-          Markup.removeKeyboard()
-      );
-  }
-
-
-  // --- 1. Handle Request Form Collection (Text steps) ---
-  
-  // A. Awaiting Name
-  if (currentState === "awaiting_request_name") {
-      await sendTypingAction(ctx);
-      userStates[userId].data.name = text; // Use 'name' key for the request data
-      userStates[userId].state = "awaiting_request_phone";
-
-      const contactButton = Markup.keyboard([[Markup.button.contactRequest("Share Contact")]])
-          .oneTime()
-          .resize();
-
-      return ctx.replyWithMarkdown(
-          `✅ Name received: *${text}*\n\n**Step 2 of 6**\n\nPlease share your **Contact Number** (use the button or type it below).`,
-          contactButton
-      );
-  }
-  
-  // B. Awaiting Phone (Manual Entry Fallback)
-  if (currentState === "awaiting_request_phone") {
-      await sendTypingAction(ctx);
-      const phoneRegex = /^\+?\d{10,15}$/; // Allow 10-15 digits, optional +
-      const normalizedPhone = text.replace(/\s/g, '');
-
-      if (!phoneRegex.test(normalizedPhone)) {
-          return ctx.reply("❌ Invalid phone number format. Please enter a valid number (e.g., `+919876543210`) or use the 'Share Contact' button.");
-      }
-      
-      // If manually typed, store it and move to next step
-      userStates[userId].data.phone = normalizedPhone.slice(-10); // Store last 10 digits
-      userStates[userId].state = "awaiting_request_trigger";
-
-      return ctx.replyWithMarkdown(
-          `✅ Phone received: \`${userStates[userId].data.phone}\`\n\n**Step 3 of 6**\n\nPlease reply with the **unique trigger word** (letters, numbers, or symbols) you want for your bot:`,
-          Markup.removeKeyboard()
-      );
-  }
-  
-  // C. Awaiting Trigger Word
-  if (currentState === "awaiting_request_trigger") {
-      await sendTypingAction(ctx);
-      const chosenTrigger = text.toLowerCase();
-      
-      // Check for existing trigger word (case-insensitive)
-      if (Object.values(AUTHORIZED_USERS_MAP).some(user => user.trigger_word.toLowerCase() === chosenTrigger)) {
-          return ctx.reply(`❌ Trigger word **\`${text}\`** is already in use by another user. Please choose a different word.`);
-      }
-
-      userStates[userId].data.trigger = text; // Store case-sensitive version, save lower-case later
-      userStates[userId].state = "awaiting_request_date";
-
-      return ctx.replyWithMarkdown(
-          `✅ Trigger word accepted: \`${text}\`\n\n**Step 4 of 6**\n\nPlease reply with the **date and time** (e.g., '12th July 2026, 10:00 AM') when you need the bot to run:`,
-          Markup.removeKeyboard()
-      );
-  }
-  
-  // D. Awaiting Date/Time
-  if (currentState === "awaiting_request_date") {
-      await sendTypingAction(ctx);
-      userStates[userId].data.date = text;
-      userStates[userId].state = "awaiting_request_upi";
-
-      return ctx.replyWithMarkdown(
-          `✅ Date/Time received: *${text}*\n\n**Step 5 of 6**\n\nPlease provide your **UPI ID** (e.g., \`user@bank\`). This is crucial for **refunding** the fee if your request is declined:`,
-          Markup.removeKeyboard()
-      );
-  }
-  
-  // E. Awaiting Refund UPI ID
-  if (currentState === "awaiting_request_upi") {
-      await sendTypingAction(ctx);
-      const refundUpi = text.trim();
-
-      if (!isValidUpiId(refundUpi)) {
-          return ctx.reply("❌ Invalid UPI ID format. Please make sure it looks like `name@bank` (e.g., `user.123@ybl`) and try again.");
-      }
-      
-      userStates[userId].data.refundUpi = refundUpi;
-      userStates[userId].state = "awaiting_request_image";
-
-      return ctx.replyWithMarkdown(
-          `✅ Refund UPI ID received: \`${refundUpi}\`\n\n**Step 6 of 6**\n\nPlease send the **Image** you want on the card (select HD quality feature while sending the image for best output quality.)`,
-          Markup.removeKeyboard()
-      );
-  }
-
-
-  // --- 2. Handle Admin Commands ---
-  if (userId === ADMIN_CHAT_ID) {
-      
-      // --- ADMIN COMMAND: /redeploy ---
-      if (lowerText === '/redeploy') {
-          return adminRedeployService(ctx);
-      }
-
-      // --- ADMIN COMMAND: /show ---
-      if (lowerText === '/show') {
-          await sendTypingAction(ctx);
-          if (Object.keys(AUTHORIZED_USERS_MAP).length === 0) {
-              return ctx.reply("The authorized user list is currently empty.");
-          }
-          
-          const userList = Object.entries(AUTHORIZED_USERS_MAP)
-              .map(([phone, data], index) => {
-                  const giftStatus = data.can_claim_gift ? '✅' : '🚫';
-                  return `${index + 1}. ${giftStatus} *${data.name}* (\`${phone}\`) -> \`${data.trigger_word}\``;
-              })
-              .join('\n');
-          
-          const header = `👤 *Authorized Users List* (${Object.keys(AUTHORIZED_USERS_MAP).length} total):\n\n`;
-          
-          if (userList.length + header.length > 4096) {
-              await ctx.replyWithMarkdown(header + "List is too long, displaying partial content...");
-              const maxChunkSize = 3500;
-              for (let i = 0; i < userList.length; i += maxChunkSize) {
-                  await ctx.replyWithMarkdown(userList.substring(i, i + maxChunkSize));
-              }
-          } else {
-              await ctx.replyWithMarkdown(header + userList);
-          }
-
-          return;
-      }
-
-      // --- ADMIN COMMAND: /add ---
-      if (lowerText.startsWith('/add')) {
-          await sendTypingAction(ctx);
-          const parts = text.slice('/add'.length).trim().split(',').map(p => p.trim());
-          
-          if (parts.length === 3) {
-              const [phoneNumber, name, triggerWord] = parts;
-              const phoneRegex = /^\d{10}$/;
-
-              if (!phoneRegex.test(phoneNumber)) {
-                  return ctx.reply("❌ Invalid phone number format. Must be 10 digits only (e.g., `9988776655`).");
-              }
-
-              if (Object.values(AUTHORIZED_USERS_MAP).some(user => user.trigger_word.toLowerCase() === triggerWord.toLowerCase())) {
-                  return ctx.reply(`❌ Trigger word **\`${triggerWord}\`** is already in use. Please choose another.`);
-              }
-              
-              if (AUTHORIZED_USERS_MAP[phoneNumber]) {
-                  return ctx.reply(`⚠️ User with phone number **\`${phoneNumber}\`** already exists. Use a different number.`);
-              }
-
-              try {
-                  const newAuthorizedUsers = { ...AUTHORIZED_USERS_MAP };
-                  newAuthorizedUsers[phoneNumber] = { 
-                      name: name, 
-                      trigger_word: triggerWord.toLowerCase(),
-                      can_claim_gift: true // Default to allowed
-                  };
-                  
-                  const committerEmail = ctx.from.username ? `${ctx.from.username}@telegram.org` : 'admin@telegram.org';
-                  const commitMessage = `feat(bot): Add new user via Telegram for ${name}`;
-
-                  await updateAuthorizedUsersOnGithub(newAuthorizedUsers, ctx.from.first_name, committerEmail, commitMessage);
-                  
-                  AUTHORIZED_USERS_MAP = newAuthorizedUsers;
-
-                  await ctx.replyWithMarkdown(`✅ User **${name}** added successfully!
-Phone: \`${phoneNumber}\`
-Trigger: \`${triggerWord}\`
-The new list is now live. Use \`/show\` to verify.`);
-                  
-              } catch (error) {
-                  console.error(error);
-                  await ctx.replyWithMarkdown(`❌ Failed to update GitHub file: ${error.message}. Please check logs and your GITHUB_TOKEN.`);
-              }
-              return;
-          } else {
-              return ctx.replyWithMarkdown("❌ Invalid command format. Use: `/add <10-digit phone>, <Full Name>, <unique_trigger>`");
-          }
-      }
-
-      // --- ADMIN COMMAND: /remove ---
-      if (lowerText.startsWith('/remove')) {
-          await sendTypingAction(ctx);
-          const query = text.slice('/remove'.length).trim();
-          
-          if (!query) {
-              return ctx.replyWithMarkdown("❌ Invalid command format. Use: `/remove <10-digit phone/partial name>`");
-          }
-
-          const matches = searchUsers(query);
-              
-          if (matches.length === 0) {
-              return ctx.replyWithMarkdown(`🔍 No users found matching: **\`${query}\`**`);
-          }
-
-          let matchText = `🔍 Found *${matches.length}* user(s) matching **\`${query}\`**:\n\n`;
-          let keyboardButtons = [];
-
-          matches.forEach(([phone, data], index) => {
-              const matchId = index + 1;
-              const formattedName = data.name.replace(/([_*`[\]()])/g, '\\$1'); 
-              
-              matchText += `${matchId}. Name: *${formattedName}*\n   Phone: \`${phone}\`\n   Trigger: \`${data.trigger_word}\`\n\n`;
-              
-              keyboardButtons.push(Markup.button.callback(`Remove ${matchId} (${data.name})`, `admin_delete:${phone}`));
-          });
-          
-          const rows = keyboardButtons.map(btn => [btn]);
-          
-          await ctx.replyWithMarkdown(
-              matchText + "⚠️ *Select a user to permanently REMOVE them from the authorized list. This action is irreversible.*", 
-              Markup.inlineKeyboard(rows)
-          );
-          
-          return;
-      }
-      
-      // --- ADMIN COMMAND: /edit ---
-      if (lowerText.startsWith('/edit')) {
-          await sendTypingAction(ctx);
-          const query = text.slice('/edit'.length).trim();
-          
-          if (!query) {
-              return ctx.replyWithMarkdown("❌ Invalid command format. Use: `/edit <10-digit phone/partial name>`");
-          }
-
-          const matches = searchUsers(query);
-              
-          if (matches.length === 0) {
-              return ctx.replyWithMarkdown(`🔍 No users found matching: **\`${query}\`**`);
-          }
-
-          let matchText = `✏️ Found *${matches.length}* user(s) matching **\`${query}\`**. Select one to edit:\n\n`;
-          let keyboardButtons = [];
-
-          matches.forEach(([phone, data], index) => {
-              const matchId = index + 1;
-              const formattedName = data.name.replace(/([_*`[\]()])/g, '\\$1'); 
-              
-              matchText += `${matchId}. Name: *${formattedName}*\n   Phone: \`${phone}\`\n   Trigger: \`${data.trigger_word}\`\n\n`;
-              
-              keyboardButtons.push(Markup.button.callback(`Edit ${matchId} (${data.name})`, `admin_edit_select:${phone}`));
-          });
-          
-          const rows = keyboardButtons.map(btn => [btn]);
-          
-          await ctx.replyWithMarkdown(matchText, Markup.inlineKeyboard(rows));
-          
-          return;
-      }
-
-      // --- ADMIN COMMAND: /revoke or /allow ---
-      if (lowerText.startsWith('/revoke') || lowerText.startsWith('/allow')) {
-          await sendTypingAction(ctx);
-          const command = lowerText.startsWith('/revoke') ? 'revoke' : 'allow';
-          const query = text.slice(`/${command}`.length).trim();
-
-          if (!query) {
-              return ctx.replyWithMarkdown(`❌ Invalid command format. Use: \`/${command} <10-digit phone/partial name>\``);
-          }
-
-          const matches = searchUsers(query);
-              
-          if (matches.length === 0) {
-              return ctx.replyWithMarkdown(`🔍 No users found matching: **\`${query}\`**`);
-          }
-
-          let matchText = `🔍 Found *${matches.length}* user(s) matching **\`${query}\`**:\n\n`;
-          let keyboardButtons = [];
-
-          matches.forEach(([phone, data], index) => {
-              const matchId = index + 1;
-              const formattedName = data.name.replace(/([_*`[\]()])/g, '\\$1'); 
-              const currentStatus = data.can_claim_gift ? '✅ ALLOWED' : '🚫 REVOKED';
-              
-              matchText += `${matchId}. *${formattedName}* - Status: ${currentStatus}\n   Phone: \`${phone}\`\n\n`;
-              
-              keyboardButtons.push(Markup.button.callback(
-                  `${command.toUpperCase()} ${matchId} (${data.name})`, 
-                  `admin_gift_manage:${command}:${phone}`
-              ));
-          });
-          
-          const rows = keyboardButtons.map(btn => [btn]);
-          
-          await ctx.replyWithMarkdown(
-              matchText + `🚨 *Select a user to **${command.toUpperCase()}** their gift eligibility.*`, 
-              Markup.inlineKeyboard(rows)
-          );
-          
-          return;
-      }
-  }
-
-
-  // --- 3. Handle Ongoing User Flows (excluding request form text steps handled above) ---
-  if (currentState && currentState.startsWith('awaiting_request_')) {
-      // If the user is in an active request step but sends an irrelevant message, prompt them again
-      // The current request step handlers above will handle the correct inputs. 
-      // This is the fallback for incorrect data in the middle of the flow.
-      await sendTypingAction(ctx);
-      return ctx.reply("Please follow the current step of the request form. If you want to start over, type `/reset`.");
-  }
-
-  if (currentState === "awaiting_upi") {
-    const upiId = lowerText;
-    // ... (existing UPI validation and spinner logic) ...
-    
-    if (isValidUpiId(upiId)) {
-        await sendTypingAction(ctx);
-        await ctx.reply(`✅ Received UPI ID: \`${upiId}\`. Thank you!`, { parse_mode: 'Markdown' });
-        
-        userStates[userId].state = "spinning";
-        userStates[userId].data.upiId = upiId; 
-
-        const giftAmount = Math.floor(Math.random() * 500) + 1; 
-        userStates[userId].data.amount = giftAmount;
-
-        await sendTypingAction(ctx);
-        const message = await ctx.reply("🎁 Spinning the wheel to select your shagun amount...");
-        const messageId = message.message_id;
-
-        const spinDuration = 3000;
-        const startTime = Date.now();
-        const spinIcon = '🎰';
-
-        const updateInterval = setInterval(async () => {
-            if (Date.now() - startTime < spinDuration) {
-                const tempNumber = Math.floor(Math.random() * 500) + 1;
                 try {
-                    await ctx.telegram.editMessageText(ctx.chat.id, messageId, undefined, `${spinIcon} Current Selection: *₹${tempNumber}*...`, { parse_mode: 'Markdown' });
-                } catch (error) {}
-            } else {
-                clearInterval(updateInterval);
-                await new Promise(r => setTimeout(r, 500));
+                    const newAuthorizedUsers = { ...AUTHORIZED_USERS_MAP, [phone]: { name, trigger_word: trigger, can_claim_gift: true } };
+                    const commitMessage = `feat(bot): Add new user ${name} via Admin Panel`;
+                    await updateAuthorizedUsersOnGithub(newAuthorizedUsers, ctx.from.first_name, null, commitMessage);
+                    AUTHORIZED_USERS_MAP = newAuthorizedUsers;
+                    await ctx.replyWithMarkdown(`✅ User **${name}** added successfully!\nPhone: \`${phone}\`\nTrigger: \`${trigger}\``);
+                } catch (error) {
+                    await ctx.reply(`❌ Failed to add user: ${error.message}`);
+                }
+                return;
+            
+            case 'awaiting_admin_search_for_edit':
+            case 'awaiting_admin_search_for_remove':
+            case 'awaiting_admin_search_for_gift':
+                const matches = searchUsers(text);
+                if (matches.length === 0) return ctx.reply(`🔍 No users found matching: **\`${text}\`**`, { parse_mode: 'Markdown' });
                 
-                await ctx.telegram.editMessageText(ctx.chat.id, messageId, undefined, `🛑 Stopping at... *₹${giftAmount}*!`, { parse_mode: 'Markdown' });
-                await new Promise(r => setTimeout(r, 1000));
+                let actionType, callbackPrefix, verb;
+                if (adminState.state === 'awaiting_admin_search_for_edit') { verb = 'Edit'; callbackPrefix = 'admin_edit_select'; }
+                if (adminState.state === 'awaiting_admin_search_for_remove') { verb = 'Remove'; callbackPrefix = 'admin_delete'; }
+                if (adminState.state === 'awaiting_admin_search_for_gift') { verb = 'Manage'; callbackPrefix = 'admin_gift_select'; } // A new prefix
 
-                await ctx.replyWithMarkdown(`🎉 You've been selected to receive a shagun of *₹${giftAmount}*!`);
-                
-                await ctx.reply("Click below to claim your gift immediately:", 
-                    Markup.inlineKeyboard([
-                        Markup.button.callback("🎁 Ask for Shagun (₹" + giftAmount + ")", "ask_for_gift")
-                    ])
+                const keyboardButtons = matches.map(([phone, data]) => 
+                    [Markup.button.callback(`${verb} ${data.name.substring(0, 20)}`, `${callbackPrefix}:${phone}`)]
                 );
                 
-                userStates[userId].state = null;
+                delete userStates[ADMIN_CHAT_ID];
+                return ctx.reply(`🔍 Found *${matches.length}* user(s). Please select one to *${verb.toLowerCase()}*:`, {
+                    parse_mode: 'Markdown', ...Markup.inlineKeyboard(keyboardButtons)
+                });
+        }
+    }
+    
+    // --- ADMIN EDIT FLOW (CONTINUED) ---
+    if (userId === ADMIN_CHAT_ID && currentState && currentState.startsWith('awaiting_edit_')) {
+        const { originalPhone } = userStates[userId].data;
+        const originalUserData = AUTHORIZED_USERS_MAP[originalPhone];
+        if (!originalUserData) {
+            delete userStates[userId];
+            return ctx.reply("❌ User data not found. Edit cancelled.");
+        }
+        let updateField, newValue = text, successMessage;
+        const newAuthorizedUsers = { ...AUTHORIZED_USERS_MAP };
+        try {
+            switch (currentState) {
+                case "awaiting_edit_name":
+                    updateField = 'Name';
+                    newAuthorizedUsers[originalPhone].name = newValue;
+                    successMessage = `✅ Name for \`${originalPhone}\` updated to **${newValue}**.`;
+                    break;
+                case "awaiting_edit_phone":
+                    updateField = 'Phone Number';
+                    if (!/^\d{10}$/.test(newValue)) return ctx.reply("❌ Invalid phone. Must be 10 digits.");
+                    if (AUTHORIZED_USERS_MAP[newValue]) return ctx.reply(`❌ Phone \`${newValue}\` is already in use.`);
+                    const userData = newAuthorizedUsers[originalPhone];
+                    delete newAuthorizedUsers[originalPhone];
+                    newAuthorizedUsers[newValue] = userData;
+                    successMessage = `✅ Phone for **${originalUserData.name}** updated to \`${newValue}\`.`;
+                    break;
+                case "awaiting_edit_trigger":
+                    updateField = 'Trigger Word';
+                    newValue = lowerText;
+                    if (Object.entries(AUTHORIZED_USERS_MAP).some(([p, u]) => u.trigger_word.toLowerCase() === newValue && p !== originalPhone)) {
+                        return ctx.reply(`❌ Trigger \`${newValue}\` is already in use.`);
+                    }
+                    newAuthorizedUsers[originalPhone].trigger_word = newValue;
+                    successMessage = `✅ Trigger for **${originalUserData.name}** updated to \`${newValue}\`.`;
+                    break;
             }
-        }, 100); 
-        return; 
-
-    } else {
-        await sendTypingAction(ctx);
-        await ctx.reply("❌ Invalid UPI ID format. Please make sure it looks like `name@bank` (e.g., `user.123@ybl`) and try again.");
+            const commitMessage = `feat(bot): Edit ${updateField} for ${originalUserData.name} via Admin Panel`;
+            await updateAuthorizedUsersOnGithub(newAuthorizedUsers, ctx.from.first_name, null, commitMessage);
+            AUTHORIZED_USERS_MAP = newAuthorizedUsers;
+            delete userStates[userId];
+            await ctx.replyWithMarkdown(successMessage);
+        } catch (error) {
+            await ctx.reply(`❌ Failed to update user: ${error.message}.`);
+        }
         return;
     }
-  }
   
-  if (currentState === "awaiting_contact") {
-    await sendTypingAction(ctx);
-    await ctx.reply('Please use the "Share Contact" button to send your number.');
-    return;
-  }
+    // --- ADMIN DECLINE REASON FLOW ---
+    if (userId === ADMIN_CHAT_ID && currentState === "awaiting_decline_reason") {
+        const { refId, originalMessageId } = userStates[userId].data;
+        await ctx.reply(`Reason received. Declining request ${refId}...`, { reply_to_message_id: originalMessageId });
+        return bot.handleUpdate({
+            update_id: ctx.update.update_id,
+            callback_query: {
+                id: `decline_${Date.now()}`, from: ctx.from,
+                message: { chat: { id: ADMIN_CHAT_ID }, message_id: originalMessageId },
+                chat_instance: 'x', data: `admin_decline_final:${refId}:${encodeURIComponent(text)}`
+            }
+        });
+    }
+
+    // --- USER COMMANDS & FLOWS ---
+    if (lowerText === '/reset') {
+        delete userStates[userId];
+        return ctx.replyWithMarkdown("🧹 **Session cleared!** You can start over.", Markup.removeKeyboard());
+    }
+    
+    if (lowerText === '/request') {
+        userStates[userId] = { state: "awaiting_request_name", data: {} };
+        return ctx.replyWithMarkdown("📝 **Custom Card Request: Step 1/6**\n\nPlease reply with your **Full Name**.");
+    }
+
+    // --- USER REQUEST FORM ---
+    if (currentState && currentState.startsWith('awaiting_request_')) {
+        const state = userStates[userId];
+        switch (currentState) {
+            case "awaiting_request_name":
+                state.data.name = text;
+                state.state = "awaiting_request_phone";
+                return ctx.replyWithMarkdown(`✅ Name: *${text}*\n\n**Step 2/6**\nPlease **share your contact** or type your number.`, Markup.keyboard([[Markup.button.contactRequest("Share Contact")]]).oneTime().resize());
+            case "awaiting_request_phone":
+                if (!/^\+?\d{10,15}$/.test(text.replace(/\s/g, ''))) return ctx.reply("❌ Invalid phone number format.");
+                state.data.phone = text.replace(/\D/g, '').slice(-10);
+                state.state = "awaiting_request_trigger";
+                return ctx.replyWithMarkdown(`✅ Phone: \`${state.data.phone}\`\n\n**Step 3/6**\nPlease reply with the **unique trigger word** for your bot:`, Markup.removeKeyboard());
+            case "awaiting_request_trigger":
+                if (Object.values(AUTHORIZED_USERS_MAP).some(u => u.trigger_word.toLowerCase() === lowerText)) return ctx.reply(`❌ Trigger word **\`${text}\`** is already in use.`);
+                state.data.trigger = text;
+                state.state = "awaiting_request_date";
+                return ctx.replyWithMarkdown(`✅ Trigger: \`${text}\`\n\n**Step 4/6**\nPlease reply with the **date and time** needed (e.g., '12th July 2026, 10:00 AM').`);
+            case "awaiting_request_date":
+                state.data.date = text;
+                state.state = "awaiting_request_upi";
+                return ctx.replyWithMarkdown(`✅ Date: *${text}*\n\n**Step 5/6**\nPlease provide your **UPI ID** for potential refunds.`);
+            case "awaiting_request_upi":
+                if (!isValidUpiId(text)) return ctx.reply("❌ Invalid UPI ID format (e.g., `user@bank`).");
+                state.data.refundUpi = text;
+                state.state = "awaiting_request_image";
+                return ctx.replyWithMarkdown(`✅ UPI ID: \`${text}\`\n\n**Step 6/6**\nPlease send the **Image** for the card.`);
+        }
+    }
   
-  if (currentState === "spinning") {
-    await sendTypingAction(ctx);
-    await ctx.reply('Please wait, the gift amount selection is in progress... 🧐');
-    return;
-  }
+    // --- USER GIFT/VERIFICATION FLOWS ---
+    if (currentState === "awaiting_upi") {
+        if (!isValidUpiId(lowerText)) return ctx.reply("❌ Invalid UPI ID. Please try again.");
+        await ctx.reply(`✅ Received UPI ID: \`${lowerText}\`.`, { parse_mode: 'Markdown' });
+        userStates[userId].state = "spinning";
+        userStates[userId].data.upiId = lowerText; 
+        const giftAmount = Math.floor(Math.random() * 500) + 1; 
+        userStates[userId].data.amount = giftAmount;
+        const message = await ctx.reply("🎁 Spinning the wheel for your shagun amount...");
+        const spinIcon = '🎰';
+        setTimeout(async () => {
+            await ctx.telegram.editMessageText(ctx.chat.id, message.message_id, undefined, `🎉 You've been selected for a shagun of *₹${giftAmount}*!`, { parse_mode: 'Markdown' });
+            await ctx.reply("Click below to claim your gift:", Markup.inlineKeyboard([Markup.button.callback(`🎁 Ask for Shagun (₹${giftAmount})`, "ask_for_gift")]));
+            userStates[userId].state = null;
+        }, 3500);
+        return; 
+    }
+  
+    if (currentState === "awaiting_contact") return ctx.reply('Please use the "Share Contact" button.');
+    if (currentState === "spinning") return ctx.reply('Please wait, the gift selection is in progress... 🧐');
 
-  // --- 4. Handle Dynamic Trigger Message flow (User flow) ---
-  let matchedUserPhoneNumber = null;
-  let matchedUserData = null;
+    // --- DYNAMIC TRIGGER WORD ---
+    const matchedUser = Object.entries(AUTHORIZED_USERS_MAP).find(([, userData]) => userData.trigger_word?.toLowerCase() === lowerText);
+    if (matchedUser) {
+        const [phoneNumber, userData] = matchedUser;
+        await ctx.reply("🔍 Secret word accepted. Verifying...");
+        userStates[userId] = { state: "awaiting_contact", data: { potentialPhoneNumber: phoneNumber, potentialName: userData.name } };
+        return ctx.replyWithMarkdown(`Please share your phone number to continue:`, Markup.keyboard([[Markup.button.contactRequest("Share Contact")]]).oneTime().resize());
+    }
 
-  // Iterate through the authorized users to find a matching trigger word
-  for (const [phoneNumber, userData] of Object.entries(AUTHORIZED_USERS_MAP)) {
-      if (userData && userData.trigger_word && userData.trigger_word.toLowerCase() === lowerText) {
-          matchedUserPhoneNumber = phoneNumber;
-          matchedUserData = userData;
-          break; // Found a match, stop searching
-      }
-  }
-
-  if (matchedUserPhoneNumber) {
-      await sendTypingAction(ctx);
-      await ctx.reply("🔍 Secret word accepted. Checking database to find matches...");
-      await new Promise((r) => setTimeout(r, 1000));
-
-      userStates[userId] = { 
-          state: "awaiting_contact", 
-          data: { 
-              potentialPhoneNumber: matchedUserPhoneNumber, 
-              potentialName: matchedUserData.name
-          } 
-      };
-
-      const contactButton = Markup.keyboard([[Markup.button.contactRequest("Share Contact")]]).oneTime().resize();
-      await sendTypingAction(ctx);
-      await ctx.replyWithMarkdown(
-          `Hello, mate! Please share your phone number to continue the verification process:`, 
-          contactButton
-      );
-      return;
-  }
-
-  // 5. Generic Fallback: Only run if the message was not a command or part of an active flow
-  if (!isCommand && !currentState) {
-      await sendTypingAction(ctx);
-      await ctx.reply("I only respond to a specific messages.");
-      
-      await sendTypingAction(ctx);
-      await ctx.reply("You can check out more details below 👇", getMainMenu());
-  }
+    // --- FALLBACK ---
+    if (!isCommand && !currentState) {
+      await ctx.reply("I only respond to specific messages.", getMainMenu());
+    }
 });
 
 
-// === Handle "Yes" Confirmation Button (Original Flow) ===
+// === Handle "Yes" Confirmation Button ===
 bot.action('confirm_yes', async (ctx) => {
     const userId = ctx.from.id;
-    const matchedName = userStates[userId]?.data?.matchedName || "the authorized user";
-    
-    await ctx.editMessageText(`✅ Identity confirmed for *${matchedName}*! Preparing your card... 💫`, { parse_mode: 'Markdown' });
-
-    // --- START: Sticker Sequence ---
-    await sendTypingAction(ctx);
+    const matchedName = userStates[userId]?.data?.matchedName || "user";
+    await ctx.editMessageText(`✅ Identity confirmed for *${matchedName}*! Preparing your card...`, { parse_mode: 'Markdown' });
     await ctx.replyWithSticker('CAACAgEAAxkBAAEPieBo5pIfbsOvjPZ6aGZJzuszgj_RMwACMAQAAhyYKEevQOWk5-70BjYE');
     await new Promise((r) => setTimeout(r, 2000));
-    await sendTypingAction(ctx);
-    await ctx.replyWithSticker('CAACAgEAAxkBAAEPf8Zo4QXOaaTjfwVq2EdaYp2t0By4UAAC-gEAAoyxIER4c3iI53gcxDYE');
-    await new Promise((r) => setTimeout(r, 1500));
-    // --- END: Sticker Sequence ---
-
-    await sendTypingAction(ctx);
     if (fs.existsSync(IMAGE_PATH)) {
-      await ctx.replyWithPhoto({ source: IMAGE_PATH }, { caption: "🎁 Your personalized card is ready — Tap to reveal!", has_spoiler: true });
+      await ctx.replyWithPhoto({ source: IMAGE_PATH }, { caption: "🎁 Your personalized card is ready!", has_spoiler: true });
     } else {
-      await ctx.reply("😔 Sorry, the personalized birthday card is missing on the server.");
-      console.error(`Error: Image not found at ${IMAGE_PATH}`);
+      await ctx.reply("😔 Sorry, the card is missing on the server.");
     }
-
-    const ratingKeyboard = Markup.inlineKeyboard([
-      [
-        Markup.button.callback("1 ⭐", "rating_1"),
-        Markup.button.callback("2 ⭐", "rating_2"),
-        Markup.button.callback("3 ⭐", "rating_3"),
-        Markup.button.callback("4 ⭐", "rating_4"),
-        Markup.button.callback("5 ⭐", "rating_5"),
-      ],
-    ]);
-    
-    await sendTypingAction(ctx);
+    const ratingKeyboard = Markup.inlineKeyboard([[1, 2, 3, 4, 5].map(n => Markup.button.callback(`${n} ⭐`, `rating_${n}`))]]);
     await ctx.reply("Please rate your experience:", ratingKeyboard);
 });
 
-// === Handle "No" Confirmation Button (Original Flow) ===
+// === Handle "No" Confirmation Button ===
 bot.action('confirm_no', async (ctx) => {
-    await ctx.editMessageText("🚫 Sorry! Authorization failed. Please try again or contact the administrator.");
+    await ctx.editMessageText("🚫 Authorization failed. Please try again or contact the administrator.");
 });
 
 
-// === Handle Ratings (Updated to check for gift eligibility) ===
+// === Handle Ratings ===
 bot.action(/^rating_/, async (ctx) => {
   const userId = ctx.from.id;
   const rating = ctx.match.input.split("_")[1];
-  const username = ctx.from.username || ctx.from.first_name;
   const matchedPhone = userStates[userId]?.data?.matchedPhone;
-
   await ctx.editMessageText(`Thank you for your rating of ${rating} ⭐!`);
-
-  await ctx.telegram.sendMessage(
-    ADMIN_CHAT_ID,
-    `User @${username} (ID: ${ctx.chat.id}) rated ${rating} ⭐`
-  );
-
-  await sendTypingAction(ctx);
+  await ctx.telegram.sendMessage(ADMIN_CHAT_ID, `User @${ctx.from.username || ctx.from.first_name} rated ${rating} ⭐`);
   
-  // Check if the user is eligible for the gift
-  const isEligible = matchedPhone && AUTHORIZED_USERS_MAP[matchedPhone]?.can_claim_gift;
-  
-  if (isEligible) {
-    const giftKeyboard = Markup.inlineKeyboard([
-        Markup.button.callback("Yes, I want a gift! 🥳", "gift_yes"),
+  if (matchedPhone && AUTHORIZED_USERS_MAP[matchedPhone]?.can_claim_gift) {
+    await ctx.replyWithMarkdown("Would you like a *bonus mystery gift*? 👀", Markup.inlineKeyboard([
+        Markup.button.callback("Yes, please! 🥳", "gift_yes"),
         Markup.button.callback("No, thank you.", "gift_no"),
-    ]);
-
-    await ctx.replyWithMarkdown(
-      "That's wonderful! We have one more surprise. Would you like a *bonus mystery gift* from us 👀?",
-      giftKeyboard
-    );
+    ]));
   } else {
-    // User is not eligible, skip the gift offer
-    await ctx.replyWithMarkdown(
-      "Thanks again for celebrating with us! We hope you enjoyed your personalized card. 😊"
-    );
+    await ctx.reply("Thanks again for celebrating with us! 😊");
   }
 });
 
-// === Gift Flow Actions (Original Flow) ===
+// === Gift Flow Actions ===
 bot.action('gift_yes', async (ctx) => {
     const userId = ctx.from.id;
-    await ctx.editMessageText("Great choice! To send you a surprise shagun gift, we need your UPI ID (e.g., `user.123@ybl`).");
-    
-    await sendTypingAction(ctx);
-    await ctx.replyWithMarkdown("Please reply to this chat with your valid *UPI ID*:");
-
-    userStates[userId] = { 
-        state: "awaiting_upi", 
-        data: userStates[userId]?.data || { amount: null, upiId: null, matchedName: null } 
-    };
+    await ctx.editMessageText("Great! To send your shagun, please reply with your valid *UPI ID* (e.g., `user@bank`):", { parse_mode: 'Markdown' });
+    userStates[userId] = { state: "awaiting_upi", data: userStates[userId]?.data || {} };
 });
-
-bot.action('gift_no', async (ctx) => {
-    await ctx.editMessageText("No worries! Thanks again for celebrating with us. Enjoy your personalized card! 😊");
-});
+bot.action('gift_no', async (ctx) => ctx.editMessageText("No worries! Thanks again for celebrating with us. 😊"));
 
 bot.action('ask_for_gift', async (ctx) => {
     const userId = ctx.from.id;
     const state = userStates[userId];
-
-    if (!state?.data.upiId || !state.data.amount) {
-        return ctx.reply("Sorry, I lost track of your details. Please restart the flow from the trigger message.");
-    }
-    
+    if (!state?.data.upiId || !state.data.amount) return ctx.reply("Sorry, I lost your details. Please restart.");
     const { upiId, amount } = state.data;
-    const refId = `BDAYGIFT${Date.now()}`; 
-    const adminRef = `ADMIN_${refId}`; 
-
-    pendingGifts[adminRef] = { userId, userUpi: upiId, amount };
-
-    await ctx.editMessageText("⏳ Waiting for confirmation...\nThis might take a bit, so feel free to keep the chat open or close the app and carry on with your stuff.\nI’ll let you know as soon as I get the confirmation."); 
-    
-    const adminNotificationText = `
-🚨 *NEW GIFT PAYMENT REQUIRED* 🚨
-
-**To User (ID: \`${userId}\`):**
-**Amount:** ₹${amount}
-**UPI ID:** \`${upiId}\`
-**Ref ID:** \`${refId}\`
-
-Click below to initialize the payment and generate the **HTTPS Redirect Link**.
-    `;
-
-    const adminKeyboard = Markup.inlineKeyboard([
-        Markup.button.callback(`🚀 Initialize Payment Link (₹${amount})`, `admin_init_pay:${adminRef}`),
-    ]);
-
-    await ctx.telegram.sendMessage(
-        ADMIN_CHAT_ID,
-        adminNotificationText,
-        { parse_mode: 'Markdown', ...adminKeyboard }
-    );
+    const refId = `GIFT${Date.now()}`;
+    pendingGifts[refId] = { userId, userUpi: upiId, amount };
+    await ctx.editMessageText("⏳ Waiting for confirmation..."); 
+    const adminNotificationText = `🚨 *GIFT PAYMENT REQUIRED*\n\nUser ID: \`${userId}\`\nAmount: *₹${amount}*\nUPI ID: \`${upiId}\`\nRef: \`${refId}\``;
+    await ctx.telegram.sendMessage(ADMIN_CHAT_ID, adminNotificationText, { parse_mode: 'Markdown', ...Markup.inlineKeyboard([Markup.button.callback(`🚀 Init Payment Link (₹${amount})`, `admin_init_pay:${refId}`)]) });
 });
-
 
 bot.action(/^admin_init_pay:/, async (ctx) => {
-    const adminRef = ctx.match.input.split(':')[1];
-    const giftData = pendingGifts[adminRef];
-    
-    if (ctx.from.id !== ADMIN_CHAT_ID) {
-        return ctx.reply("🚫 You are not authorized to perform this admin action.");
-    }
-
-    if (!giftData) {
-        return ctx.editMessageText("❌ Error: Payment reference expired or not found.", { parse_mode: 'Markdown' });
-    }
-
+    const refId = ctx.match.input.split(':')[1];
+    const giftData = pendingGifts[refId];
+    if (!giftData) return ctx.editMessageText("❌ Error: Payment reference expired.", { parse_mode: 'Markdown' });
     const { userId, userUpi, amount } = giftData;
-    const refId = adminRef.replace('ADMIN_', '');
-    
-    const upiLink = `upi://pay?pa=${userUpi}&am=${amount}&pn=${encodeURIComponent("Bday Gift Payee")}&tr=${refId}`;
-    
+    const upiLink = `upi://pay?pa=${userUpi}&am=${amount}&pn=Bday%20Gift&tr=${refId}`;
     const redirectId = Math.random().toString(36).substring(2, 15);
     redirectLinkStore[redirectId] = upiLink;
-    
     finalConfirmationMap[refId] = userId; 
-
     const httpsRedirectLink = `${BOT_PUBLIC_BASE_URL}/pay-redirect?id=${redirectId}`;
-
-    await bot.telegram.sendMessage(
-        userId,
-        "✨ Payment initialization started, waiting for few minutes you'll soon receive your gift. 😊"
-    );
-    
-    // Edit the message to show processing/link, but keep the core details intact in the reply chain
-    await ctx.editMessageText(
-        ctx.callbackQuery.message.text + `\n\n🔗 *Payment Link for ₹${amount}* to \`${userUpi}\`\n\n**If the button fails, copy the VPA (\`${userUpi}\`) and pay manually.**`,
-        {
-            parse_mode: 'Markdown',
-            ...Markup.inlineKeyboard([
-                Markup.button.url("🔥 Finalize Payment in UPI App (HTTPS) - Click to Pay", httpsRedirectLink) 
-            ])
-        }
-    );
-    
-    await ctx.telegram.sendMessage(
-        ADMIN_CHAT_ID,
-        `✅ Payment link initiated for ₹${amount} to ${userUpi}.\n\n*Click "Payment Done" ONLY after you have successfully completed the transaction in your UPI app.*`,
-        {
-            parse_mode: 'Markdown',
-            ...Markup.inlineKeyboard([
-                Markup.button.callback("✅ Payment Done - Notify User", `payment_done:${refId}`)
-            ])
-        }
-    );
-    
-    delete pendingGifts[adminRef];
+    await bot.telegram.sendMessage(userId, "✨ Your gift is being processed...");
+    await ctx.editMessageText(`${ctx.callbackQuery.message.text}\n\n🔗 *Payment Link for ₹${amount}* to \`${userUpi}\``, {
+        parse_mode: 'Markdown', ...Markup.inlineKeyboard([Markup.button.url("🔥 Click to Pay via UPI App", httpsRedirectLink)])
+    });
+    await ctx.telegram.sendMessage(ADMIN_CHAT_ID, `✅ Payment link for ₹${amount} to ${userUpi} initiated.\n\n*Click "Payment Done" ONLY after completing the transaction.*`, {
+        parse_mode: 'Markdown', ...Markup.inlineKeyboard([Markup.button.callback("✅ Payment Done", `payment_done:${refId}`)])
+    });
+    delete pendingGifts[refId];
 });
 
-
 bot.action(/^payment_done:/, async (ctx) => {
-    if (ctx.from.id !== ADMIN_CHAT_ID) {
-        return ctx.reply("🚫 You are not authorized to perform this admin action.");
-    }
-    
     const refId = ctx.match.input.split(':')[1];
     const targetUserId = finalConfirmationMap[refId];
-
-    if (!targetUserId) {
-        return ctx.editMessageText("❌ Error: Could not determine target user ID for confirmation. Reference may have expired.", { parse_mode: 'Markdown' });
-    }
-
-    await bot.telegram.sendMessage(
-        targetUserId,
-        "🎉 **Shagun has been sent successfully!** Please check your bank account or UPI application. We hope you enjoyed your birthday surprise! ❤️",
-        { parse_mode: 'Markdown' }
-    );
-    
-    await ctx.editMessageText(`✅ User (ID: ${targetUserId}) has been successfully notified that payment is complete for Ref ID: ${refId}.`, { parse_mode: 'Markdown' });
-
+    if (!targetUserId) return ctx.editMessageText("❌ Error: Could not find target user.", { parse_mode: 'Markdown' });
+    await bot.telegram.sendMessage(targetUserId, "🎉 **Shagun sent!** Please check your account. We hope you enjoyed the surprise! ❤️", { parse_mode: 'Markdown' });
+    await ctx.editMessageText(`✅ User (ID: ${targetUserId}) notified of payment for Ref: ${refId}.`, { parse_mode: 'Markdown' });
     delete finalConfirmationMap[refId];
 });
 
-// === Info & Socials Buttons (Original Flow) ===
+// === Info & Socials Buttons ===
 bot.action(["info","description","master","uptime","socials","back_to_menu"], async (ctx) => {
   const data = ctx.match.input;
   const uptimeSeconds = Math.floor((Date.now() - START_TIME) / 1000);
@@ -1622,106 +909,45 @@ bot.action(["info","description","master","uptime","socials","back_to_menu"], as
   const minutes = Math.floor((uptimeSeconds % 3600) / 60);
   const seconds = uptimeSeconds % 60;
   const uptimeStr = `${hours}h ${minutes}m ${seconds}s`;
-
   const backButton = Markup.inlineKeyboard([[Markup.button.callback("⬅️ Back","back_to_menu")]]);
-
   switch(data){
-    case "info":
-      await ctx.editMessageText(
-        "🤖 *Bot Info*\n\nThis bot was specially made for sending personalized *birthday wish cards* to that person who deserves a surprise 🎉🎂.",
-        { parse_mode:"Markdown", ...backButton }
-      );
-      break;
-
-    case "description":
-      await ctx.editMessageText(
-        "💬 *Description*\n\nA fun, interactive bot built to deliver surprise birthday wishes with love 💫",
-        { parse_mode:"Markdown", ...backButton }
-      );
-      break;
-
-    case "master":
-      await ctx.editMessageText(
-        "👤 *Master*\n\nMade by **Shovith (Sid)** ✨",
-        { parse_mode:"Markdown", ...backButton }
-      );
-      break;
-
-    case "uptime":
-      await ctx.editMessageText(
-        `⏱ *Uptime*\n\nThis bot has been running for \`${uptimeStr}\`.`,
-        { parse_mode:"Markdown", ...backButton }
-      );
-      break;
-
-    case "socials":
-      await ctx.editMessageText(
-        "*🌐 Master’s Socials*\n\nChoose a platform to connect:",
-        {
-          parse_mode:"Markdown",
-          ...Markup.inlineKeyboard([
-            [Markup.button.url("WhatsApp", "https://wa.me/918777845713")],
-            [Markup.button.url("Telegram", "https://t.me/X_o_x_o_002")],
-            [Markup.button.url("Website", "https://hawkay002.github.io/Connect/")],
-            [Markup.button.callback("⬅️ Back", "back_to_menu")]
-          ])
-        }
-      );
-      break;
-
-    case "back_to_menu":
-      await ctx.editMessageText("You can check out more details below 👇", getMainMenu());
-      break;
+    case "info": await ctx.editMessageText("🤖 *Bot Info*\n\nThis bot sends personalized *birthday wish cards* to surprise people 🎉.", { parse_mode:"Markdown", ...backButton }); break;
+    case "description": await ctx.editMessageText("💬 *Description*\n\nA fun, interactive bot to deliver surprise birthday wishes with love 💫", { parse_mode:"Markdown", ...backButton }); break;
+    case "master": await ctx.editMessageText("👤 *Master*\n\nMade by **Shovith (Sid)** ✨", { parse_mode:"Markdown", ...backButton }); break;
+    case "uptime": await ctx.editMessageText(`⏱ *Uptime*\n\nBot has been running for \`${uptimeStr}\`.`, { parse_mode:"Markdown", ...backButton }); break;
+    case "socials": await ctx.editMessageText("*🌐 Master’s Socials*\n\nChoose a platform:", { parse_mode:"Markdown", ...Markup.inlineKeyboard([[Markup.button.url("WhatsApp", "https://wa.me/918777845713"), Markup.button.url("Telegram", "https://t.me/X_o_x_o_002")],[Markup.button.url("Website", "https://hawkay002.github.io/Connect/"), Markup.button.callback("⬅️ Back", "back_to_menu")]]) }); break;
+    case "back_to_menu": await ctx.editMessageText("You can check out more details below 👇", getMainMenu()); break;
   }
 });
 
 // === Main startup function ===
 async function main() {
-    if (!GITHUB_TOKEN) {
-        console.warn("⚠️ WARNING: GITHUB_TOKEN is not set. Admin GitHub update feature will NOT work.");
-    }
-    if (!RENDER_DEPLOY_HOOK) {
-        console.warn("⚠️ WARNING: RENDER_DEPLOY_HOOK is not set. Admin /redeploy feature will NOT work.");
-    }
+    if (!GITHUB_TOKEN) console.warn("⚠️ WARNING: GITHUB_TOKEN is not set. GitHub updates will fail.");
+    if (!RENDER_DEPLOY_HOOK) console.warn("⚠️ WARNING: RENDER_DEPLOY_HOOK is not set.");
     if (!BOT_PUBLIC_BASE_URL) {
-        console.error("❌ FATAL ERROR: BOT_PUBLIC_BASE_URL is not set. Cannot run in Webhook mode.");
+        console.error("❌ FATAL ERROR: BOT_PUBLIC_BASE_URL is not set.");
         process.exit(1);
     }
-    
-    // 1. Load data from the external GitHub source and get the current SHA
     await loadAuthorizedUsers();
     
-    // 2. Configure and Start Bot with Webhook
-    
-    // Define a secure, secret path for Telegram to send updates to
     const WEBHOOK_PATH = '/telegraf-webhook-secret';
     const WEBHOOK_URL = `${BOT_PUBLIC_BASE_URL}${WEBHOOK_PATH}`;
     
     try {
-        // 2a. Clear any previous webhooks, consume pending updates, and set the new one.
-        // This is crucial to prevent the 409 Conflict error.
         await bot.telegram.setWebhook(''); 
         await bot.telegram.getUpdates(0, 100, -1); 
         await bot.telegram.setWebhook(WEBHOOK_URL);
-        
         console.log(`✅ Webhook set successfully to: ${WEBHOOK_URL}`);
-        console.log("Cleanup complete: Webhook cleared and pending updates consumed.");
     } catch (e) {
         console.error("❌ FATAL ERROR: Failed to set up webhook.", e.message);
         process.exit(1);
     }
 
-    // 3. Mount the bot's webhook handler to the existing Express app.
-    // The Express app is already configured to listen on PORT.
     app.use(bot.webhookCallback(WEBHOOK_PATH));
-
     console.log("🤖 Bot is running in Webhook mode...");
     
-    // 4. Graceful shutdown handlers
-    // Use process.exit(0) for graceful exit in webhook mode on platforms like Render
     process.once("SIGINT", () => { console.log("SIGINT received, shutting down."); process.exit(0); });
     process.once("SIGTERM", () => { console.log("SIGTERM received, shutting down."); process.exit(0); });
 }
 
-// Execute main function
 main();
