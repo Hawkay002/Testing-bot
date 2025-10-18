@@ -220,7 +220,7 @@ bot.command('masters_social', async (ctx) => {
 });
 
 // ===============================================
-// === NEW: ADMIN CONTROL PANEL (START) ===
+// === ADMIN CONTROL PANEL (START) ===
 // ===============================================
 
 // --- Keyboards ---
@@ -341,7 +341,7 @@ bot.action('admin_cancel_state', async (ctx) => {
 });
 
 // ===============================================
-// === NEW: ADMIN CONTROL PANEL (END) ===
+// === ADMIN CONTROL PANEL (END) ===
 // ===============================================
 
 
@@ -824,7 +824,15 @@ bot.action('confirm_yes', async (ctx) => {
     } else {
       await ctx.reply("😔 Sorry, the card is missing on the server.");
     }
-    const ratingKeyboard = Markup.inlineKeyboard([[1, 2, 3, 4, 5].map(n => Markup.button.callback(`${n} ⭐`, `rating_${n}`))]]);
+    const ratingKeyboard = Markup.inlineKeyboard([
+        [
+            Markup.button.callback("1 ⭐", "rating_1"),
+            Markup.button.callback("2 ⭐", "rating_2"),
+            Markup.button.callback("3 ⭐", "rating_3"),
+            Markup.button.callback("4 ⭐", "rating_4"),
+            Markup.button.callback("5 ⭐", "rating_5"),
+        ],
+    ]);
     await ctx.reply("Please rate your experience:", ratingKeyboard);
 });
 
