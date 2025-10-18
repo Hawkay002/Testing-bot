@@ -6,61 +6,51 @@
     <title>Bot Admin Dashboard</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <!-- Font Awesome for Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
     <style>
         :root {
             --bg-color: #1a202c;
             --card-bg: #2d3748;
             --text-color: #e2e8f0;
             --primary-color: #4299e1;
-            --danger-color: #e53e3e;
-            --success-color: #48bb78;
+            --danger-color: #ef4444; /* Brighter Red */
+            --success-color: #22c55e; /* Brighter Green */
         }
         body {
             background-color: var(--bg-color);
             color: var(--text-color);
             font-family: 'Inter', sans-serif;
         }
-        .modal-backdrop {
-            background-color: rgba(0, 0, 0, 0.7);
-        }
-        .modal-content {
-            background-color: var(--card-bg);
-        }
+        .modal-backdrop { background-color: rgba(0, 0, 0, 0.7); }
+        .modal-content { background-color: var(--card-bg); }
         .btn-primary { background-color: var(--primary-color); }
-        .btn-danger { background-color: var(--danger-color); }
-        .btn-success { background-color: var(--success-color); }
+        
+        /* Colored Toggle Switch Styling */
         .toggle-bg:after {
             content: '';
-            @apply absolute top-0.5 left-0.5 bg-white border border-gray-300 rounded-full h-5 w-5 transition shadow-sm;
+            @apply absolute top-0.5 left-0.5 bg-white border border-gray-300 rounded-full h-5 w-5 transition-transform shadow-sm;
         }
         input:checked + .toggle-bg:after {
             transform: translateX(100%);
             @apply border-white;
         }
+        /* Default (off) state */
+        .toggle-bg {
+            @apply bg-red-500;
+        }
+        /* Checked (on) state */
         input:checked + .toggle-bg {
             @apply bg-green-500;
         }
+
         .toast {
-            visibility: hidden;
-            min-width: 250px;
-            background-color: var(--success-color);
-            color: white;
-            text-align: center;
-            border-radius: 8px;
-            padding: 16px;
-            position: fixed;
-            z-index: 100;
-            left: 50%;
-            transform: translateX(-50%);
-            bottom: 30px;
-            opacity: 0;
-            transition: opacity 0.3s, visibility 0.3s, bottom 0.3s;
+            visibility: hidden; min-width: 250px; color: white; text-align: center;
+            border-radius: 8px; padding: 16px; position: fixed; z-index: 100;
+            left: 50%; transform: translateX(-50%); bottom: 30px; opacity: 0;
+            transition: all 0.3s ease-in-out;
         }
-        .toast.show {
-            visibility: visible;
-            opacity: 1;
-            bottom: 50px;
-        }
+        .toast.show { visibility: visible; opacity: 1; bottom: 50px; }
     </style>
     <link rel="stylesheet" href="https://rsms.me/inter/inter.css">
 </head>
@@ -72,11 +62,16 @@
 
     <div id="app" class="hidden">
         <!-- Header -->
-        <div class="flex justify-between items-center mb-6">
+        <div class="flex justify-between items-center mb-6 gap-2">
             <h1 class="text-2xl font-bold">Admin Dashboard</h1>
-            <button id="addUserBtn" class="btn-primary text-white font-bold py-2 px-4 rounded-lg shadow-md hover:bg-blue-600 transition">
-                + Add User
-            </button>
+            <div class="flex gap-2">
+                 <button id="redeployBtn" class="bg-yellow-500 text-white font-bold py-2 px-4 rounded-lg shadow-md hover:bg-yellow-600 transition flex items-center gap-2">
+                    <i class="fas fa-sync-alt"></i> Redeploy
+                </button>
+                <button id="addUserBtn" class="btn-primary text-white font-bold py-2 px-4 rounded-lg shadow-md hover:bg-blue-600 transition flex items-center gap-2">
+                    <i class="fas fa-plus"></i> Add User
+                </button>
+            </div>
         </div>
 
         <!-- Search -->
@@ -85,9 +80,7 @@
         </div>
 
         <!-- User List -->
-        <div id="userList" class="space-y-3">
-            <!-- User cards will be injected here -->
-        </div>
+        <div id="userList" class="space-y-3"></div>
     </div>
 
     <!-- Add/Edit User Modal -->
@@ -126,8 +119,6 @@
             tg.ready();
             tg.expand();
 
-            // This URL is the root of your Render Web Service.
-            // It is NOT the URL of the dashboard page itself.
             const API_BASE_URL = 'https://testing-bot-v328.onrender.com'; // IMPORTANT: Replace with your bot's public URL
 
             const loader = document.getElementById('loader');
@@ -135,6 +126,7 @@
             const userList = document.getElementById('userList');
             const searchInput = document.getElementById('searchInput');
             const addUserBtn = document.getElementById('addUserBtn');
+            const redeployBtn = document.getElementById('redeployBtn');
             const userModal = document.getElementById('userModal');
             const modalTitle = document.getElementById('modalTitle');
             const cancelModalBtn = document.getElementById('cancelModalBtn');
@@ -147,10 +139,13 @@
 
             let users = {};
 
-            const showToast = (message, type = 'success') => {
+            const showToast = (message, type = 'success', duration = 3000) => {
                 toast.textContent = message;
-                toast.className = `toast show ${type === 'danger' ? 'bg-red-500' : 'bg-green-500'}`;
-                setTimeout(() => { toast.className = 'toast'; }, 3000);
+                let bgColor = 'bg-green-500';
+                if (type === 'danger') bgColor = 'bg-red-500';
+                if (type === 'info') bgColor = 'bg-blue-500';
+                toast.className = `toast show ${bgColor}`;
+                setTimeout(() => { toast.className = 'toast'; }, duration);
             };
 
             const renderUsers = (filter = '') => {
@@ -169,21 +164,22 @@
                     const card = document.createElement('div');
                     card.className = 'p-4 rounded-lg shadow-md flex justify-between items-center';
                     card.style.backgroundColor = 'var(--card-bg)';
+                    const isGiftEnabled = user.can_claim_gift === undefined ? true : user.can_claim_gift; // Default to true if not present
                     card.innerHTML = `
                         <div>
                             <p class="font-bold text-lg">${user.name}</p>
                             <p class="text-sm text-gray-400">${phone} | <span class="font-mono bg-gray-700 px-1 rounded">${user.trigger_word}</span></p>
                         </div>
-                        <div class="flex items-center space-x-3">
+                        <div class="flex items-center space-x-4">
                             <label class="flex items-center cursor-pointer">
                                 <span class="mr-2 text-sm">Gift:</span>
                                 <div class="relative">
-                                    <input type="checkbox" class="sr-only gift-toggle" data-phone="${phone}" ${user.can_claim_gift ? 'checked' : ''}>
-                                    <div class="block bg-gray-600 w-12 h-6 rounded-full toggle-bg"></div>
+                                    <input type="checkbox" class="sr-only gift-toggle" data-phone="${phone}" ${isGiftEnabled ? 'checked' : ''}>
+                                    <div class="block w-12 h-6 rounded-full toggle-bg"></div>
                                 </div>
                             </label>
-                            <button class="edit-btn text-blue-400 hover:text-blue-300" data-phone="${phone}">Edit</button>
-                            <button class="delete-btn text-red-500 hover:text-red-400" data-phone="${phone}">Delete</button>
+                            <button class="edit-btn text-blue-400 hover:text-blue-300 text-lg" data-phone="${phone}"><i class="fas fa-pencil-alt" data-phone="${phone}"></i></button>
+                            <button class="delete-btn text-red-500 hover:text-red-400 text-lg" data-phone="${phone}"><i class="fas fa-trash-alt" data-phone="${phone}"></i></button>
                         </div>
                     `;
                     userList.appendChild(card);
@@ -192,15 +188,17 @@
             
             const fetchData = async () => {
                 try {
+                    loader.classList.remove('hidden');
+                    app.classList.add('hidden');
                     const response = await fetch(`${API_BASE_URL}/api/users`);
                     if (!response.ok) throw new Error('Failed to fetch users');
                     users = await response.json();
                     renderUsers();
-                    loader.classList.add('hidden');
                     app.classList.remove('hidden');
                 } catch (error) {
-                    loader.innerHTML = `<div class="text-center text-red-400">Error: Could not connect to the bot backend.<br>${error.message}</div>`;
-                    tg.showAlert(`Failed to load data: ${error.message}`);
+                    app.innerHTML = `<div class="text-center text-red-400 p-4 bg-red-900/50 rounded-lg">Error: Could not connect to the bot backend.<br>${error.message}</div>`;
+                } finally {
+                    loader.classList.add('hidden');
                 }
             };
 
@@ -233,7 +231,7 @@
                     if (!response.ok) throw new Error(result.error || 'API action failed');
                     
                     showToast(result.message || 'Success!');
-                    await fetchData();
+                    await fetchData(); // Refresh data after action
                     return true;
                 } catch (error) {
                     showToast(error.message, 'danger');
@@ -245,6 +243,15 @@
             addUserBtn.addEventListener('click', () => openModal('add'));
             cancelModalBtn.addEventListener('click', closeModal);
             searchInput.addEventListener('input', (e) => renderUsers(e.target.value));
+
+            redeployBtn.addEventListener('click', () => {
+                tg.showConfirm('Are you sure you want to redeploy the bot? This will restart the service with the latest code from GitHub.', async (ok) => {
+                    if (ok) {
+                        showToast('Triggering redeploy...', 'info', 5000);
+                        await handleApiAction('/api/redeploy', 'POST', {});
+                    }
+                });
+            });
 
             userForm.addEventListener('submit', async (e) => {
                 e.preventDefault();
@@ -262,18 +269,20 @@
             });
 
             userList.addEventListener('click', async (e) => {
-                const target = e.target;
-                if (!target.dataset.phone) return;
-                const phone = target.dataset.phone;
+                const phone = e.target.dataset.phone;
+                if (!phone) return;
 
-                if (target.classList.contains('edit-btn')) openModal('edit', phone);
-                if (target.classList.contains('delete-btn')) {
+                if (e.target.classList.contains('edit-btn') || e.target.parentElement.classList.contains('edit-btn')) {
+                    openModal('edit', phone);
+                }
+                if (e.target.classList.contains('delete-btn') || e.target.parentElement.classList.contains('delete-btn')) {
                     tg.showConfirm(`Are you sure you want to delete ${users[phone].name}?`, async (ok) => {
                         if (ok) await handleApiAction('/api/user/delete', 'POST', { phone });
                     });
                 }
-                if (target.classList.contains('gift-toggle')) {
-                    await handleApiAction('/api/user/gift', 'POST', { phone, can_claim_gift: target.checked });
+                if (e.target.classList.contains('gift-toggle')) {
+                    // Let the default checkbox behavior handle the state change
+                    await handleApiAction('/api/user/gift', 'POST', { phone, can_claim_gift: e.target.checked });
                 }
             });
 
@@ -282,4 +291,3 @@
     </script>
 </body>
 </html>
-
