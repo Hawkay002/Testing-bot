@@ -210,7 +210,6 @@ app.get('/pay-redirect', (req, res) => {
     if (upiLink) res.redirect(302, upiLink);
     else res.status(404).send('Link expired or not found.');
 });
-// The static server will automatically handle /dashboard.html requests
 
 // === HELPER FUNCTIONS ===
 async function sendTypingAction(ctx) {
@@ -356,80 +355,59 @@ bot.action(/^admin_decline_final:/, async (ctx) => {
 
 // --- FULL MESSAGE HANDLERS (PHOTOS, CONTACT, TEXT) ---
 
+// =========================================================================================
+// === DEFINITIVE FIX FOR THE PHOTO/DOCUMENT UPLOAD FLOW ===
+// =========================================================================================
 bot.on(['photo', 'document'], async (ctx) => {
-    const userId = ctx.from.id;
-    const state = userStates[userId];
-    if (!state || !state.state.startsWith('awaiting_request_')) return;
+    try {
+        const userId = ctx.from.id;
+        const state = userStates[userId];
 
-    let fileId, mimeType, caption = ctx.message.caption;
-    if (ctx.message.photo) {
-        fileId = ctx.message.photo.slice(-1)[0].file_id;
-        mimeType = 'image/jpeg';
-    } else if (ctx.message.document?.mime_type?.startsWith('image')) {
-        fileId = ctx.message.document.file_id;
-        mimeType = ctx.message.document.mime_type;
-    } else return;
+        if (!state || !state.state.startsWith('awaiting_request_')) return;
 
-    if (state.state === "awaiting_request_image") {
-        await sendTypingAction(ctx);
-        state.data.cardImageId = fileId;
-        state.data.cardImageCaption = caption || 'No caption';
-        state.data.cardImageMime = mimeType;
-        state.state = "awaiting_payment_screenshot";
-        
-        await ctx.reply("✅ Card Image received. Proceeding to payment...");
-        
-        const captionHtml = `
+        let fileId;
+        if (ctx.message.photo) {
+            fileId = ctx.message.photo.slice(-1)[0].file_id;
+        } else if (ctx.message.document?.mime_type?.startsWith('image')) {
+            fileId = ctx.message.document.file_id;
+        } else return;
+
+        // --- Step 1: Handling the CARD IMAGE upload ---
+        if (state.state === "awaiting_request_image") {
+            await sendTypingAction(ctx);
+            state.data.cardImageId = fileId;
+            state.state = "awaiting_payment_screenshot"; // CRITICAL: Update state
+            
+            await ctx.reply("✅ Card Image received. Proceeding to payment...");
+            
+            const captionHtml = `
 <b>💰 Payment Required</b>
+Please pay a standard fee of <i>₹${REQUEST_FEE}</i>. Pay via the QR code or VPA: <code>${BOT_ADMIN_VPA}</code>.
+Optionally add ₹500 for the Shagun feature (total ₹550). The Shagun amount (₹1-₹500) will be gifted, and the remainder refunded to you.
+For issues, use /masters_social.`.trim();
 
-Please pay a standard fee of <i>₹${REQUEST_FEE}</i> for custom card design requests. Pay via the QR code above or VPA: <code>${BOT_ADMIN_VPA}</code>.
-
-And if you would like to include the Shagun feature with your request, please send an extra ₹500 making a total of ₹550.
-
-ℹ️ What is the Shagun feature?
-
-- After a user gives a rating between 1–5 stars, they will get a message asking if they would like a surprise gift. If they tap “Yes”, the bot will ask for their UPI ID. Then it will randomly pick a number between 1 and 500 — that number becomes their Shagun amount, which is sent to them by the admin.
-
-The rest of the ₹500 (after the Shagun amount is decided) will be refunded to the same UPI ID the user provided while making the request.
-If no Shagun amount is claimed, you will receive a full refund of your ₹500 within 24 hours or less.
-
-For any unresolved issues or questions, use /masters_social to contact the owner directly.
-        `.trim();
-
-        if (fs.existsSync(UPI_QR_CODE_PATH)) {
-            await ctx.replyWithPhoto({ source: UPI_QR_CODE_PATH }, { caption: captionHtml, parse_mode: 'HTML' });
-        } else {
-             await ctx.replyWithHTML(captionHtml);
+            if (fs.existsSync(UPI_QR_CODE_PATH)) {
+                await ctx.replyWithPhoto({ source: UPI_QR_CODE_PATH }, { caption: captionHtml, parse_mode: 'HTML' });
+            } else {
+                await ctx.replyWithHTML(captionHtml);
+            }
+            await ctx.replyWithMarkdown("💳 After paying, please send the **payment screenshot**.\n\n⚠️ **Payment must be made within 7 days before 11:59pm IST.**");
+            return; // IMPORTANT: Stop execution here to wait for the next photo
         }
-        return ctx.replyWithMarkdown("💳 After paying, please send the **payment screenshot**.\n\n⚠️ **Payment has to be done within 7 days before 11:59pm IST or the fee will be increased later.**");
-    }
-    
-    // FIX #2: Restored and corrected the admin notification logic
-    if (state.state === "awaiting_payment_screenshot") {
-        await sendTypingAction(ctx);
-        state.data.paymentScreenshotId = fileId;
-        state.data.paymentScreenshotMime = mimeType;
-        
-        await ctx.reply("✅ Screenshot received. Your request is now being reviewed! Please wait for admin confirmation.");
-        
-        const requestData = state.data;
-        const refId = `REQ${Date.now()}`;
-        
-        pendingRequests[refId] = {
-            userId: userId,
-            name: requestData.name,
-            phone: requestData.phone,
-            trigger: requestData.trigger.toLowerCase(),
-            date: requestData.date,
-            refundUpi: requestData.refundUpi,
-            cardImageId: requestData.cardImageId,
-            cardImageMime: requestData.cardImageMime,
-            cardImageCaption: requestData.cardImageCaption,
-            paymentScreenshotId: requestData.paymentScreenshotId,
-            paymentScreenshotMime: requestData.paymentScreenshotMime,
-        };
 
-        const notificationText = `
+        // --- Step 2: Handling the PAYMENT SCREENSHOT upload ---
+        if (state.state === "awaiting_payment_screenshot") {
+            await sendTypingAction(ctx);
+            state.data.paymentScreenshotId = fileId;
+            
+            await ctx.reply("✅ Screenshot received. Your request is now being reviewed! Please wait for admin confirmation.");
+            
+            const requestData = state.data;
+            const refId = `REQ${Date.now()}`;
+            
+            pendingRequests[refId] = { userId, ...requestData };
+
+            const notificationText = `
 🔔 *NEW CUSTOM CARD REQUEST PENDING* 🔔
 Ref ID: \`${refId}\`
 User ID: \`${userId}\`
@@ -438,32 +416,32 @@ Phone: \`${requestData.phone}\`
 Date Needed: \`${requestData.date}\`
 Trigger Word: \`${requestData.trigger}\`
 Refund UPI: \`${requestData.refundUpi}\`
-        `;
-        
-        const adminKeyboard = Markup.inlineKeyboard([
-            [Markup.button.callback("✅ Grant Request & Add User", `admin_grant_request:${refId}`)],
-            [Markup.button.callback("❌ Decline Request", `admin_decline_init:${refId}`)],
-        ]);
-        
-        const sentMessage = await ctx.telegram.sendMessage(ADMIN_CHAT_ID, notificationText, { parse_mode: 'Markdown', ...adminKeyboard });
-        pendingRequests[refId].notificationMessageId = sentMessage.message_id;
-        
-        await ctx.telegram.sendMessage(ADMIN_CHAT_ID, `**[REQ ${refId}] FILES FOR REVIEW:**`, { parse_mode: 'Markdown', reply_to_message_id: sentMessage.message_id });
-        
-        try {
+            `.trim();
+            
+            const adminKeyboard = Markup.inlineKeyboard([
+                [Markup.button.callback("✅ Grant Request & Add User", `admin_grant_request:${refId}`)],
+                [Markup.button.callback("❌ Decline Request", `admin_decline_init:${refId}`)],
+            ]);
+            
+            const sentMessage = await ctx.telegram.sendMessage(ADMIN_CHAT_ID, notificationText, { parse_mode: 'Markdown', ...adminKeyboard });
+            
             await ctx.telegram.sendPhoto(ADMIN_CHAT_ID, requestData.cardImageId, { caption: `Card Image for ${requestData.name} (Ref ID: ${refId})`, reply_to_message_id: sentMessage.message_id });
-        } catch (e) {
-             await ctx.telegram.sendMessage(ADMIN_CHAT_ID, `⚠️ Failed to send Card Image for ${refId}. File ID: \`${requestData.cardImageId}\``);
-        }
-        try {
             await ctx.telegram.sendPhoto(ADMIN_CHAT_ID, requestData.paymentScreenshotId, { caption: `Payment Proof for ${requestData.name} (Ref ID: ${refId})`, reply_to_message_id: sentMessage.message_id });
-        } catch (e) {
-             await ctx.telegram.sendMessage(ADMIN_CHAT_ID, `⚠️ Failed to send Payment Screenshot for ${refId}. File ID: \`${requestData.paymentScreenshotId}\``);
+            
+            delete userStates[userId]; // CRITICAL: Clear state after successful processing
+            return; // IMPORTANT: Stop execution
         }
-        
-        delete userStates[userId];
+    } catch (error) {
+        console.error("!!!!!!!!!! CRITICAL PHOTO HANDLER ERROR !!!!!!!!!!", error);
+        try {
+            await ctx.reply("I'm sorry, a critical error occurred while processing your image. Please type /reset and try again. The administrator has been notified.");
+            await bot.telegram.sendMessage(ADMIN_CHAT_ID, `🚨 CRITICAL ERROR in photo handler for user ${ctx.from.id}: ${error.message}`);
+        } catch (e) {
+            console.error("Failed to even send error message.", e);
+        }
     }
 });
+
 
 bot.on("contact", async (ctx) => {
     const userId = ctx.from.id;
@@ -556,7 +534,6 @@ bot.on("text", async (ctx) => {
         const message = await ctx.reply("🎁 Spinning the wheel to select your shagun amount...");
         const messageId = message.message_id;
 
-        // FIX #1: Adjusted spin duration to 4 seconds
         const spinDuration = 4000;
         const startTime = Date.now();
         const spinIcon = '🎰';
@@ -630,7 +607,6 @@ bot.action(/^rating_/, async (ctx) => {
   const matchedPhone = userStates[userId]?.data?.matchedPhone;
   await ctx.editMessageText(`Thank you for your rating of ${rating} ⭐!`);
   
-  // FIX #3: Added Chat ID to the admin notification with clear labeling
   const username = ctx.from.username || ctx.from.first_name;
   await ctx.telegram.sendMessage(ADMIN_CHAT_ID, `User @${username} (Chat ID: \`${ctx.chat.id}\`) rated ${rating} ⭐`, { parse_mode: 'Markdown'});
   
