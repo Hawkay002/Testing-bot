@@ -52,7 +52,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 // === GitHub Functions ===
 async function loadAuthorizedUsers() {
-    console.log(`📡 Fetching authorized users from: ${GITHUB_USERS_URL}`);
+    console.log(`📡 Fetching initial authorized users from: ${GITHUB_USERS_URL}`);
     try {
         const contentResponse = await fetch(GITHUB_USERS_URL, { cache: 'no-store' });
         if (!contentResponse.ok) throw new Error(`Failed to fetch raw content. HTTP status: ${contentResponse.status}`);
@@ -79,10 +79,17 @@ async function loadAuthorizedUsers() {
     }
 }
 
+// This function now ONLY pushes to GitHub. It does not re-read.
 async function updateAuthorizedUsersOnGithub(newContent, committerName, commitMessage) {
     if (!GITHUB_TOKEN) throw new Error("GITHUB_TOKEN environment variable is not set.");
-    if (!GITHUB_FILE_SHA) throw new Error("Current file SHA is unknown. Cannot perform update.");
     
+    // Fetch the latest SHA right before committing to avoid conflicts
+    const metadataUrl = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${GITHUB_FILE_PATH}`;
+    const metadataResponse = await fetch(metadataUrl, { headers: { 'Authorization': `token ${GITHUB_TOKEN}` } });
+    if (!metadataResponse.ok) throw new Error(`Failed to fetch latest SHA. Status: ${metadataResponse.status}`);
+    const metadata = await metadataResponse.json();
+    GITHUB_FILE_SHA = metadata.sha;
+
     const contentToCommit = {};
     for (const [phone, userData] of Object.entries(newContent)) {
         const cleanedUserData = { ...userData };
@@ -108,8 +115,8 @@ async function updateAuthorizedUsersOnGithub(newContent, committerName, commitMe
 
     if (response.ok) {
         const result = await response.json();
-        GITHUB_FILE_SHA = result.content.sha;
-        await loadAuthorizedUsers(); // CRITICAL: Immediately reload data after a successful commit
+        GITHUB_FILE_SHA = result.content.sha; // Update SHA for the next operation
+        console.log(`✅ GitHub successfully updated. New SHA: ${GITHUB_FILE_SHA}`);
         return true;
     } else {
         const errorText = await response.text();
@@ -118,50 +125,76 @@ async function updateAuthorizedUsersOnGithub(newContent, committerName, commitMe
 }
 
 // ===============================================
-// === MINI APP API ENDPOINTS (NOW RETURNS UPDATED DATA) ===
+// === MINI APP API ENDPOINTS (DEFINITIVE FIX) ===
 // ===============================================
 
 app.get('/api/users', (req, res) => res.json(AUTHORIZED_USERS_MAP));
 
+// The pattern for all API endpoints is now:
+// 1. Update the in-memory map INSTANTLY.
+// 2. Respond to the dashboard with the updated map.
+// 3. Save to GitHub in the background.
+
 app.post('/api/user/add', async (req, res) => {
     try {
         const { phone, name, trigger } = req.body;
-        const newUsers = { ...AUTHORIZED_USERS_MAP, [phone]: { name, trigger_word: trigger, can_claim_gift: true } };
-        await updateAuthorizedUsersOnGithub(newUsers, 'Admin Dashboard', `feat: Add user ${name}`);
+        // 1. Update in-memory map
+        AUTHORIZED_USERS_MAP[phone] = { name, trigger_word: trigger, can_claim_gift: true };
+        
+        // 2. Respond immediately
         res.json({ message: 'User added successfully!', users: AUTHORIZED_USERS_MAP });
+
+        // 3. Save to GitHub asynchronously
+        updateAuthorizedUsersOnGithub(AUTHORIZED_USERS_MAP, 'Admin Dashboard', `feat: Add user ${name}`).catch(console.error);
     } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
 app.post('/api/user/edit', async (req, res) => {
     try {
         const { originalPhone, phone, name, trigger } = req.body;
-        let currentUsers = { ...AUTHORIZED_USERS_MAP };
-        const userData = { ...currentUsers[originalPhone], name, trigger_word: trigger };
-        if (originalPhone !== phone) delete currentUsers[originalPhone];
-        currentUsers[phone] = userData;
-        await updateAuthorizedUsersOnGithub(currentUsers, 'Admin Dashboard', `feat: Edit user ${name}`);
+        // 1. Update in-memory map
+        const userData = { ...AUTHORIZED_USERS_MAP[originalPhone], name, trigger_word: trigger };
+        if (originalPhone !== phone) {
+            delete AUTHORIZED_USERS_MAP[originalPhone];
+        }
+        AUTHORIZED_USERS_MAP[phone] = userData;
+
+        // 2. Respond immediately
         res.json({ message: 'User updated successfully!', users: AUTHORIZED_USERS_MAP });
+        
+        // 3. Save to GitHub asynchronously
+        updateAuthorizedUsersOnGithub(AUTHORIZED_USERS_MAP, 'Admin Dashboard', `feat: Edit user ${name}`).catch(console.error);
     } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
 app.post('/api/user/delete', async (req, res) => {
     try {
         const { phone } = req.body;
-        const newUsers = { ...AUTHORIZED_USERS_MAP };
-        delete newUsers[phone];
-        await updateAuthorizedUsersOnGithub(newUsers, 'Admin Dashboard', `feat: Remove user ${phone}`);
+        // 1. Update in-memory map
+        delete AUTHORIZED_USERS_MAP[phone];
+        
+        // 2. Respond immediately
         res.json({ message: 'User deleted successfully!', users: AUTHORIZED_USERS_MAP });
+        
+        // 3. Save to GitHub asynchronously
+        updateAuthorizedUsersOnGithub(AUTHORIZED_USERS_MAP, 'Admin Dashboard', `feat: Remove user ${phone}`).catch(console.error);
     } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
 app.post('/api/user/gift', async (req, res) => {
     try {
         const { phone, can_claim_gift } = req.body;
-        const newUsers = { ...AUTHORIZED_USERS_MAP };
-        newUsers[phone].can_claim_gift = can_claim_gift;
-        const status = can_claim_gift ? 'enabled' : 'disabled';
-        await updateAuthorizedUsersOnGithub(newUsers, 'Admin Dashboard', `feat: Set gift to ${status} for ${phone}`);
+        // 1. Update in-memory map
+        if(AUTHORIZED_USERS_MAP[phone]) {
+            AUTHORIZED_USERS_MAP[phone].can_claim_gift = can_claim_gift;
+        }
+
+        // 2. Respond immediately
         res.json({ message: `Gift access for ${phone} updated.`, users: AUTHORIZED_USERS_MAP });
+        
+        // 3. Save to GitHub asynchronously
+        const status = can_claim_gift ? 'enabled' : 'disabled';
+        updateAuthorizedUsersOnGithub(AUTHORIZED_USERS_MAP, 'Admin Dashboard', `feat: Set gift to ${status} for ${phone}`).catch(console.error);
     } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
@@ -184,7 +217,7 @@ app.post('/api/redeploy', async (req, res) => {
 
 
 // ===============================================
-// === ORIGINAL BOT LOGIC (PRESERVED) ===
+// === ORIGINAL BOT LOGIC (UNCHANGED) ===
 // ===============================================
 
 app.get('/', (req, res) => res.send('✅ Bot server is alive!'));
@@ -265,14 +298,13 @@ bot.action(/^admin_grant_request:/, async (ctx) => {
         await ctx.editMessageReplyMarkup(Markup.inlineKeyboard([[Markup.button.callback(`✅ GRANTED (${requestData.name})`, 'ignore')]]).reply_markup);
         await ctx.reply(`✅ Request ${refId} granted. Notifying user and adding to authorized list.`, { reply_to_message_id: ctx.callbackQuery.message.message_id });
         
-        const newAuthorizedUsers = { ...AUTHORIZED_USERS_MAP };
-        newAuthorizedUsers[requestData.phone] = { 
+        AUTHORIZED_USERS_MAP[requestData.phone] = { 
             name: requestData.name, 
             trigger_word: requestData.trigger.toLowerCase(),
             can_claim_gift: true
         };
         const commitMessage = `feat(bot): Add user ${requestData.name} via approved request ${refId}`;
-        await updateAuthorizedUsersOnGithub(newAuthorizedUsers, "Bot System (Request Grant)", commitMessage);
+        updateAuthorizedUsersOnGithub(AUTHORIZED_USERS_MAP, "Bot System (Request Grant)", commitMessage).catch(console.error);
         
     } catch (e) {
         await ctx.reply(`⚠️ Request ${refId} granted, but an error occurred during processing: ${e.message}`);
