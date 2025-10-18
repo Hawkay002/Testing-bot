@@ -126,6 +126,8 @@
             tg.ready();
             tg.expand();
 
+            // This URL is the root of your Render Web Service.
+            // It is NOT the URL of the dashboard page itself.
             const API_BASE_URL = 'https://testing-bot-v328.onrender.com'; // IMPORTANT: Replace with your bot's public URL
 
             const loader = document.getElementById('loader');
@@ -148,9 +150,7 @@
             const showToast = (message, type = 'success') => {
                 toast.textContent = message;
                 toast.className = `toast show ${type === 'danger' ? 'bg-red-500' : 'bg-green-500'}`;
-                setTimeout(() => {
-                    toast.className = 'toast';
-                }, 3000);
+                setTimeout(() => { toast.className = 'toast'; }, 3000);
             };
 
             const renderUsers = (filter = '') => {
@@ -165,7 +165,7 @@
                     return;
                 }
 
-                filteredUsers.forEach(([phone, user]) => {
+                filteredUsers.sort(([, a], [, b]) => a.name.localeCompare(b.name)).forEach(([phone, user]) => {
                     const card = document.createElement('div');
                     card.className = 'p-4 rounded-lg shadow-md flex justify-between items-center';
                     card.style.backgroundColor = 'var(--card-bg)';
@@ -220,9 +220,7 @@
                 userModal.style.display = 'flex';
             };
 
-            const closeModal = () => {
-                userModal.style.display = 'none';
-            };
+            const closeModal = () => userModal.style.display = 'none';
             
             const handleApiAction = async (endpoint, method, body) => {
                 try {
@@ -235,7 +233,7 @@
                     if (!response.ok) throw new Error(result.error || 'API action failed');
                     
                     showToast(result.message || 'Success!');
-                    await fetchData(); // Refresh data
+                    await fetchData();
                     return true;
                 } catch (error) {
                     showToast(error.message, 'danger');
@@ -265,23 +263,17 @@
 
             userList.addEventListener('click', async (e) => {
                 const target = e.target;
+                if (!target.dataset.phone) return;
                 const phone = target.dataset.phone;
 
-                if (target.classList.contains('edit-btn')) {
-                    openModal('edit', phone);
-                }
-                
+                if (target.classList.contains('edit-btn')) openModal('edit', phone);
                 if (target.classList.contains('delete-btn')) {
-                    tg.showConfirm(`Are you sure you want to delete user ${users[phone].name}?`, async (confirmed) => {
-                        if (confirmed) {
-                           await handleApiAction('/api/user/delete', 'POST', { phone });
-                        }
+                    tg.showConfirm(`Are you sure you want to delete ${users[phone].name}?`, async (ok) => {
+                        if (ok) await handleApiAction('/api/user/delete', 'POST', { phone });
                     });
                 }
-                
                 if (target.classList.contains('gift-toggle')) {
-                    const can_claim_gift = target.checked;
-                    await handleApiAction('/api/user/gift', 'POST', { phone, can_claim_gift });
+                    await handleApiAction('/api/user/gift', 'POST', { phone, can_claim_gift: target.checked });
                 }
             });
 
