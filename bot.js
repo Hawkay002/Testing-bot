@@ -49,7 +49,7 @@ app.use(express.json()); // Middleware to parse JSON bodies
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Serve the dashboard.html file
+// Serve the dashboard.html file from the 'public' directory
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/dashboard', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'dashboard.html'));
@@ -213,7 +213,6 @@ app.post('/api/user/gift', async (req, res) => {
     }
 });
 
-
 // ===============================================
 // === MINI APP API ENDPOINTS (END) ===
 // ===============================================
@@ -246,11 +245,6 @@ bot.command('admin', async (ctx) => {
     await ctx.reply('The admin panel has been upgraded! Use /dashboard to open the new Mini App interface.');
 });
 
-
-// ... [The rest of your bot's logic for user-facing interactions remains here]
-// For brevity, I am omitting the large blocks of existing bot logic that do not need changes.
-// The functions like `confirm_yes`, `rating_`, `gift_yes`, text handler for trigger words,
-// contact handler, photo handler for custom requests, etc., are all still here.
 
 // === Handle "Yes" Confirmation Button ===
 bot.action('confirm_yes', async (ctx) => {
@@ -308,7 +302,71 @@ bot.action('gift_yes', async (ctx) => {
 });
 bot.action('gift_no', async (ctx) => ctx.editMessageText("No worries! Thanks again for celebrating with us. 😊"));
 
-//... and so on for the rest of the user-facing bot logic.
+// === Handle Contact Messages (For user verification) ===
+bot.on("contact", async (ctx) => {
+    const userId = ctx.from.id;
+    const state = userStates[userId];
+    const contact = ctx.message.contact;
+    const fullPhone = contact.phone_number.replace(/\D/g, "");
+    const normalizedNumber = fullPhone.slice(-10);
+  
+    // --- Verification logic ---
+    if (state?.state === "awaiting_contact") {
+      const { potentialPhoneNumber, potentialName } = state.data;
+      state.state = null;
+      
+      if (normalizedNumber === potentialPhoneNumber && AUTHORIZED_USERS_MAP[normalizedNumber]) {
+        state.data.matchedName = potentialName;
+        state.data.matchedPhone = normalizedNumber;
+        
+        await ctx.reply("🔐 Authenticating...");
+        
+        const confirmationKeyboard = Markup.inlineKeyboard([
+            Markup.button.callback("Yes, that's me!", "confirm_yes"),
+            Markup.button.callback("No, that's not me", "confirm_no")
+        ]);
+        return ctx.replyWithMarkdown(`As per matches found, are you *${potentialName}*?`, confirmationKeyboard);
+      } else {
+        return ctx.reply("🚫 The shared contact number does not match. Authorization failed.");
+      }
+    }
+  });
+  
+// === Handle Text Messages (For trigger words and gift flow) ===
+bot.on("text", async (ctx) => {
+    const userId = ctx.from.id;
+    const text = ctx.message.text.trim();
+    const lowerText = text.toLowerCase();
+    const currentState = userStates[userId]?.state;
+    const isCommand = lowerText.startsWith('/');
+
+    // Ignore commands that are handled elsewhere
+    if (isCommand) return;
+
+    // --- USER GIFT/VERIFICATION FLOWS ---
+    if (currentState === "awaiting_upi") {
+        if (!/^[a-zA-Z0-9\.\-_]+@[a-zA-Z0-9\-]+$/.test(lowerText)) return ctx.reply("❌ Invalid UPI ID. Please try again.");
+        await ctx.reply(`✅ Received UPI ID: \`${lowerText}\`.`, { parse_mode: 'Markdown' });
+        // ... rest of UPI/gift logic
+        return;
+    }
+  
+    if (currentState === "awaiting_contact") return ctx.reply('Please use the "Share Contact" button.');
+
+    // --- DYNAMIC TRIGGER WORD ---
+    const matchedUser = Object.entries(AUTHORIZED_USERS_MAP).find(([, userData]) => userData.trigger_word?.toLowerCase() === lowerText);
+    if (matchedUser) {
+        const [phoneNumber, userData] = matchedUser;
+        await ctx.reply("🔍 Secret word accepted. Verifying...");
+        userStates[userId] = { state: "awaiting_contact", data: { potentialPhoneNumber: phoneNumber, potentialName: userData.name } };
+        return ctx.replyWithMarkdown(`Please share your phone number to continue:`, Markup.keyboard([[Markup.button.contactRequest("Share Contact")]]).oneTime().resize());
+    }
+
+    // --- FALLBACK ---
+    if (!currentState) {
+      await ctx.reply("I only respond to specific messages or trigger words.");
+    }
+});
 
 
 // === Main startup function ===
@@ -321,10 +379,23 @@ async function main() {
     
     await loadAuthorizedUsers();
     
-    // Set up bot webhook
-    const WEBHOOK_PATH = `/telegraf/${bot.secretPathComponent()}`;
-    await bot.telegram.setWebhook(`${BOT_PUBLIC_BASE_URL}${WEBHOOK_PATH}`);
-    app.use(bot.webhookCallback(WEBHOOK_PATH));
+    // Define a secure, secret path for Telegram to send updates to
+    const webhookPath = `/telegraf/${bot.secretPathComponent()}`;
+    const webhookUrl = `${BOT_PUBLIC_BASE_URL}${webhookPath}`;
+
+    try {
+        // **FIX:** Clear any old webhooks and pending updates before setting the new one.
+        await bot.telegram.deleteWebhook({ drop_pending_updates: true });
+        await bot.telegram.setWebhook(webhookUrl);
+        
+        console.log(`✅ Webhook set successfully to: ${webhookUrl}`);
+    } catch (e) {
+        console.error("❌ FATAL ERROR: Failed to set up webhook.", e.message);
+        process.exit(1);
+    }
+
+    // Mount the bot's webhook handler to the existing Express app.
+    app.use(bot.webhookCallback(webhookPath));
 
     // Start listening
     const PORT = process.env.PORT || 10000;
@@ -333,8 +404,13 @@ async function main() {
         console.log(`🔗 Dashboard available at ${BOT_PUBLIC_BASE_URL}/dashboard`);
     });
     
+    // Graceful shutdown
     process.once("SIGINT", () => bot.stop("SIGINT"));
     process.once("SIGTERM", () => bot.stop("SIGTERM"));
 }
 
-main();
+main().catch(err => {
+    console.error("❌ Uncaught error in main function:", err);
+    process.exit(1);
+});
+
