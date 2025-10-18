@@ -50,9 +50,9 @@ const __dirname = path.dirname(__filename);
 app.use(express.static(path.join(__dirname, 'public')));
 
 
-// === GitHub Functions ===
+// === GitHub Functions (from original, adapted for dashboard) ===
 async function loadAuthorizedUsers() {
-    console.log(`📡 Fetching initial authorized users from: ${GITHUB_USERS_URL}`);
+    console.log(`📡 Fetching authorized users from: ${GITHUB_USERS_URL}`);
     try {
         const contentResponse = await fetch(GITHUB_USERS_URL, { cache: 'no-store' });
         if (!contentResponse.ok) throw new Error(`Failed to fetch raw content. HTTP status: ${contentResponse.status}`);
@@ -79,11 +79,9 @@ async function loadAuthorizedUsers() {
     }
 }
 
-// This function now ONLY pushes to GitHub. It does not re-read.
 async function updateAuthorizedUsersOnGithub(newContent, committerName, commitMessage) {
     if (!GITHUB_TOKEN) throw new Error("GITHUB_TOKEN environment variable is not set.");
     
-    // Fetch the latest SHA right before committing to avoid conflicts
     const metadataUrl = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${GITHUB_FILE_PATH}`;
     const metadataResponse = await fetch(metadataUrl, { headers: { 'Authorization': `token ${GITHUB_TOKEN}` } });
     if (!metadataResponse.ok) throw new Error(`Failed to fetch latest SHA. Status: ${metadataResponse.status}`);
@@ -115,7 +113,7 @@ async function updateAuthorizedUsersOnGithub(newContent, committerName, commitMe
 
     if (response.ok) {
         const result = await response.json();
-        GITHUB_FILE_SHA = result.content.sha; // Update SHA for the next operation
+        GITHUB_FILE_SHA = result.content.sha;
         console.log(`✅ GitHub successfully updated. New SHA: ${GITHUB_FILE_SHA}`);
         return true;
     } else {
@@ -125,26 +123,16 @@ async function updateAuthorizedUsersOnGithub(newContent, committerName, commitMe
 }
 
 // ===============================================
-// === MINI APP API ENDPOINTS (DEFINITIVE FIX) ===
+// === NEW: MINI APP API ENDPOINTS ===
 // ===============================================
 
 app.get('/api/users', (req, res) => res.json(AUTHORIZED_USERS_MAP));
 
-// The pattern for all API endpoints is now:
-// 1. Update the in-memory map INSTANTLY.
-// 2. Respond to the dashboard with the updated map.
-// 3. Save to GitHub in the background.
-
 app.post('/api/user/add', async (req, res) => {
     try {
         const { phone, name, trigger } = req.body;
-        // 1. Update in-memory map
         AUTHORIZED_USERS_MAP[phone] = { name, trigger_word: trigger, can_claim_gift: true };
-        
-        // 2. Respond immediately
         res.json({ message: 'User added successfully!', users: AUTHORIZED_USERS_MAP });
-
-        // 3. Save to GitHub asynchronously
         updateAuthorizedUsersOnGithub(AUTHORIZED_USERS_MAP, 'Admin Dashboard', `feat: Add user ${name}`).catch(console.error);
     } catch (error) { res.status(500).json({ error: error.message }); }
 });
@@ -152,17 +140,12 @@ app.post('/api/user/add', async (req, res) => {
 app.post('/api/user/edit', async (req, res) => {
     try {
         const { originalPhone, phone, name, trigger } = req.body;
-        // 1. Update in-memory map
         const userData = { ...AUTHORIZED_USERS_MAP[originalPhone], name, trigger_word: trigger };
         if (originalPhone !== phone) {
             delete AUTHORIZED_USERS_MAP[originalPhone];
         }
         AUTHORIZED_USERS_MAP[phone] = userData;
-
-        // 2. Respond immediately
         res.json({ message: 'User updated successfully!', users: AUTHORIZED_USERS_MAP });
-        
-        // 3. Save to GitHub asynchronously
         updateAuthorizedUsersOnGithub(AUTHORIZED_USERS_MAP, 'Admin Dashboard', `feat: Edit user ${name}`).catch(console.error);
     } catch (error) { res.status(500).json({ error: error.message }); }
 });
@@ -170,13 +153,8 @@ app.post('/api/user/edit', async (req, res) => {
 app.post('/api/user/delete', async (req, res) => {
     try {
         const { phone } = req.body;
-        // 1. Update in-memory map
         delete AUTHORIZED_USERS_MAP[phone];
-        
-        // 2. Respond immediately
         res.json({ message: 'User deleted successfully!', users: AUTHORIZED_USERS_MAP });
-        
-        // 3. Save to GitHub asynchronously
         updateAuthorizedUsersOnGithub(AUTHORIZED_USERS_MAP, 'Admin Dashboard', `feat: Remove user ${phone}`).catch(console.error);
     } catch (error) { res.status(500).json({ error: error.message }); }
 });
@@ -184,15 +162,10 @@ app.post('/api/user/delete', async (req, res) => {
 app.post('/api/user/gift', async (req, res) => {
     try {
         const { phone, can_claim_gift } = req.body;
-        // 1. Update in-memory map
         if(AUTHORIZED_USERS_MAP[phone]) {
             AUTHORIZED_USERS_MAP[phone].can_claim_gift = can_claim_gift;
         }
-
-        // 2. Respond immediately
         res.json({ message: `Gift access for ${phone} updated.`, users: AUTHORIZED_USERS_MAP });
-        
-        // 3. Save to GitHub asynchronously
         const status = can_claim_gift ? 'enabled' : 'disabled';
         updateAuthorizedUsersOnGithub(AUTHORIZED_USERS_MAP, 'Admin Dashboard', `feat: Set gift to ${status} for ${phone}`).catch(console.error);
     } catch (error) { res.status(500).json({ error: error.message }); }
@@ -217,7 +190,7 @@ app.post('/api/redeploy', async (req, res) => {
 
 
 // ===============================================
-// === ORIGINAL BOT LOGIC (UNCHANGED) ===
+// === ORIGINAL BOT LOGIC (PRESERVED) ===
 // ===============================================
 
 app.get('/', (req, res) => res.send('✅ Bot server is alive!'));
@@ -351,27 +324,36 @@ bot.action(/^admin_decline_final:/, async (ctx) => {
     delete pendingRequests[refId];
 });
 
+// =========================================================================================
+// === YOUR ORIGINAL, WORKING PHOTO/DOCUMENT HANDLER - RESTORED VERBATIM ===
+// =========================================================================================
 bot.on(['photo', 'document'], async (ctx) => {
     const userId = ctx.from.id;
-    const state = userStates[userId];
-    if (!state || !state.state.startsWith('awaiting_request_')) return;
+    const isPhoto = ctx.message.photo;
+    const isDocument = ctx.message.document;
+    
+    let fileId = null;
+    let caption = ctx.message.caption;
 
-    let fileId;
-    if (ctx.message.photo) {
-        fileId = ctx.message.photo.slice(-1)[0].file_id;
-    } else if (ctx.message.document?.mime_type?.startsWith('image')) {
-        fileId = ctx.message.document.file_id;
+    if (isPhoto) {
+        const photoArray = isPhoto;
+        fileId = photoArray[photoArray.length - 1].file_id;
+    } else if (isDocument && isDocument.mime_type?.startsWith('image')) {
+        fileId = isDocument.file_id;
     } else {
-        return;
+        return; // Ignore non-image documents
     }
 
-    if (state.state === "awaiting_request_image") {
+    const state = userStates[userId];
+    
+    if (state?.state === "awaiting_request_image") {
         await sendTypingAction(ctx);
         state.data.cardImageId = fileId;
-        state.data.cardImageCaption = ctx.message.caption || 'No caption';
+        state.data.cardImageCaption = caption || 'No caption provided';
         state.state = "awaiting_payment_screenshot";
         
         await ctx.reply("✅ Card Image received. Proceeding to payment step...");
+        await sendTypingAction(ctx);
         
         const captionHtml = `
 <b>💰 Payment Required</b>
@@ -388,10 +370,11 @@ For any unresolved issues, use /masters_social.`.trim();
              await ctx.replyWithHTML(captionHtml);
         }
         
-        return ctx.replyWithMarkdown("💳 Once payment is successful, please reply with the **screenshot of your payment**.\n\n⚠️ **Payment has to be done within 7 days before 11:59pm IST.**");
+        await sendTypingAction(ctx);
+        return ctx.replyWithMarkdown("💳 Once payment is successful, please reply to this chat with the **screenshot of your payment**.\n\n⚠️ **Payment has to be done within 7 days before 11:59pm IST.**");
     }
     
-    if (state.state === "awaiting_payment_screenshot") {
+    if (state?.state === "awaiting_payment_screenshot") {
         await sendTypingAction(ctx);
         state.data.paymentScreenshotId = fileId;
         
@@ -418,6 +401,8 @@ Refund UPI: \`${requestData.refundUpi}\``.trim();
         ]);
         
         const sentMessage = await ctx.telegram.sendMessage(ADMIN_CHAT_ID, notificationText, { parse_mode: 'Markdown', ...adminKeyboard });
+        
+        await ctx.telegram.sendMessage(ADMIN_CHAT_ID, `**[REQ ${refId}] FILES FOR REVIEW:**`, { parse_mode: 'Markdown', reply_to_message_id: sentMessage.message_id });
         
         await ctx.telegram.sendPhoto(ADMIN_CHAT_ID, requestData.cardImageId, { caption: `Card Image for ${requestData.name} (Ref ID: ${refId})`, reply_to_message_id: sentMessage.message_id });
         await ctx.telegram.sendPhoto(ADMIN_CHAT_ID, requestData.paymentScreenshotId, { caption: `Payment Proof for ${requestData.name} (Ref ID: ${refId})`, reply_to_message_id: sentMessage.message_id });
