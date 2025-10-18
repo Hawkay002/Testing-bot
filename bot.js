@@ -19,7 +19,7 @@ const GITHUB_REPO = process.env.GITHUB_REPO || 'Testing-bot';
 const GITHUB_FILE_PATH = process.env.GITHUB_FILE_PATH || 'authorized_users.json'; 
 const GITHUB_USERS_URL = `https://raw.githubusercontent.com/${GITHUB_OWNER}/${GITHUB_REPO}/main/${GITHUB_FILE_PATH}`;
 const BOT_PUBLIC_BASE_URL = process.env.RENDER_EXTERNAL_URL; 
-const RENDER_DEPLOY_HOOK = process.env.RENDER_DEPLOY_HOOK; // For the redeploy feature
+const RENDER_DEPLOY_HOOK = process.env.RENDER_DEPLOY_HOOK;
 
 const IMAGE_PATH = "Wishing Birthday.jpg"; 
 const UPI_QR_CODE_PATH = "upi_qr_code.png"; 
@@ -109,7 +109,7 @@ async function updateAuthorizedUsersOnGithub(newContent, committerName, commitMe
     if (response.ok) {
         const result = await response.json();
         GITHUB_FILE_SHA = result.content.sha;
-        await loadAuthorizedUsers();
+        await loadAuthorizedUsers(); // CRITICAL: Immediately reload data after a successful commit
         return true;
     } else {
         const errorText = await response.text();
@@ -118,7 +118,7 @@ async function updateAuthorizedUsersOnGithub(newContent, committerName, commitMe
 }
 
 // ===============================================
-// === MINI APP API ENDPOINTS ===
+// === MINI APP API ENDPOINTS (NOW RETURNS UPDATED DATA) ===
 // ===============================================
 
 app.get('/api/users', (req, res) => res.json(AUTHORIZED_USERS_MAP));
@@ -128,7 +128,7 @@ app.post('/api/user/add', async (req, res) => {
         const { phone, name, trigger } = req.body;
         const newUsers = { ...AUTHORIZED_USERS_MAP, [phone]: { name, trigger_word: trigger, can_claim_gift: true } };
         await updateAuthorizedUsersOnGithub(newUsers, 'Admin Dashboard', `feat: Add user ${name}`);
-        res.json({ message: 'User added successfully!' });
+        res.json({ message: 'User added successfully!', users: AUTHORIZED_USERS_MAP });
     } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
@@ -140,7 +140,7 @@ app.post('/api/user/edit', async (req, res) => {
         if (originalPhone !== phone) delete currentUsers[originalPhone];
         currentUsers[phone] = userData;
         await updateAuthorizedUsersOnGithub(currentUsers, 'Admin Dashboard', `feat: Edit user ${name}`);
-        res.json({ message: 'User updated successfully!' });
+        res.json({ message: 'User updated successfully!', users: AUTHORIZED_USERS_MAP });
     } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
@@ -150,7 +150,7 @@ app.post('/api/user/delete', async (req, res) => {
         const newUsers = { ...AUTHORIZED_USERS_MAP };
         delete newUsers[phone];
         await updateAuthorizedUsersOnGithub(newUsers, 'Admin Dashboard', `feat: Remove user ${phone}`);
-        res.json({ message: 'User deleted successfully!' });
+        res.json({ message: 'User deleted successfully!', users: AUTHORIZED_USERS_MAP });
     } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
@@ -161,11 +161,10 @@ app.post('/api/user/gift', async (req, res) => {
         newUsers[phone].can_claim_gift = can_claim_gift;
         const status = can_claim_gift ? 'enabled' : 'disabled';
         await updateAuthorizedUsersOnGithub(newUsers, 'Admin Dashboard', `feat: Set gift to ${status} for ${phone}`);
-        res.json({ message: `Gift access for ${phone} updated.` });
+        res.json({ message: `Gift access for ${phone} updated.`, users: AUTHORIZED_USERS_MAP });
     } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-// NEW: Redeploy endpoint
 app.post('/api/redeploy', async (req, res) => {
     if (!RENDER_DEPLOY_HOOK) {
         return res.status(500).json({ error: "RENDER_DEPLOY_HOOK is not set on the server." });
@@ -173,13 +172,13 @@ app.post('/api/redeploy', async (req, res) => {
     try {
         const response = await fetch(RENDER_DEPLOY_HOOK, { method: 'POST' });
         if (response.ok) {
-            res.json({ message: "Redeploy triggered successfully! Please wait 1-3 minutes for changes to apply." });
+            res.json({ message: "Redeploy triggered successfully! Please wait 1-3 minutes." });
         } else {
             const errorText = await response.text();
             res.status(500).json({ error: `Failed to trigger redeploy hook. Status: ${response.status}. Error: ${errorText}` });
         }
     } catch (error) {
-        res.status(500).json({ error: `An error occurred while contacting the Render service: ${error.message}` });
+        res.status(500).json({ error: `An error occurred while contacting Render: ${error.message}` });
     }
 });
 
@@ -188,7 +187,6 @@ app.post('/api/redeploy', async (req, res) => {
 // === ORIGINAL BOT LOGIC (PRESERVED) ===
 // ===============================================
 
-// === SERVER ROUTES (from original) ===
 app.get('/', (req, res) => res.send('✅ Bot server is alive!'));
 app.get('/pay-redirect', (req, res) => {
     const upiLink = redirectLinkStore[req.query.id];
@@ -196,7 +194,6 @@ app.get('/pay-redirect', (req, res) => {
     else res.status(404).send('Link expired or not found.');
 });
 
-// === HELPER FUNCTIONS (from original) ===
 async function sendTypingAction(ctx) {
     await ctx.replyWithChatAction('typing');
     await new Promise(r => setTimeout(r, 600));
@@ -214,7 +211,6 @@ function getMainMenu() {
   ]);
 }
 
-// === NEW: Dashboard command ===
 bot.command('dashboard', async (ctx) => {
     if (ctx.from.id !== ADMIN_CHAT_ID) return;
     await ctx.reply('Click the button below to open the new, powerful admin dashboard.', Markup.keyboard([
@@ -222,7 +218,6 @@ bot.command('dashboard', async (ctx) => {
     ]).resize());
 });
 
-// === ALL ORIGINAL COMMANDS AND HANDLERS START HERE ===
 bot.start(async (ctx) => {
   await sendTypingAction(ctx);
   await ctx.reply("Hi! Send your unique secret word you just copied to get your personalized card! ❤️❤️❤️");
@@ -260,7 +255,6 @@ bot.command('request', async (ctx) => {
     );
 });
 
-// === ADMIN ACTIONS (from original) ===
 bot.action(/^admin_grant_request:/, async (ctx) => {
     if (ctx.from.id !== ADMIN_CHAT_ID) return;
     const refId = ctx.match.input.split(':')[1];
@@ -271,7 +265,6 @@ bot.action(/^admin_grant_request:/, async (ctx) => {
         await ctx.editMessageReplyMarkup(Markup.inlineKeyboard([[Markup.button.callback(`✅ GRANTED (${requestData.name})`, 'ignore')]]).reply_markup);
         await ctx.reply(`✅ Request ${refId} granted. Notifying user and adding to authorized list.`, { reply_to_message_id: ctx.callbackQuery.message.message_id });
         
-        // AUTO ADD USER
         const newAuthorizedUsers = { ...AUTHORIZED_USERS_MAP };
         newAuthorizedUsers[requestData.phone] = { 
             name: requestData.name, 
