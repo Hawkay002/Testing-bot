@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bot Admin Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        :root {
+            --bg-color: #1a202c;
+            --card-bg: #2d3748;
+            --text-color: #e2e8f0;
+            --primary-color: #4299e1;
+            --danger-color: #e53e3e;
+            --success-color: #48bb78;
+        }
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            font-family: 'Inter', sans-serif;
+        }
+        .modal-backdrop {
+            background-color: rgba(0, 0, 0, 0.7);
+        }
+        .modal-content {
+            background-color: var(--card-bg);
+        }
+        .btn-primary { background-color: var(--primary-color); }
+        .btn-danger { background-color: var(--danger-color); }
+        .btn-success { background-color: var(--success-color); }
+        .toggle-bg:after {
+            content: '';
+            @apply absolute top-0.5 left-0.5 bg-white border border-gray-300 rounded-full h-5 w-5 transition shadow-sm;
+        }
+        input:checked + .toggle-bg:after {
+            transform: translateX(100%);
+            @apply border-white;
+        }
+        input:checked + .toggle-bg {
+            @apply bg-green-500;
+        }
+        .toast {
+            visibility: hidden;
+            min-width: 250px;
+            background-color: var(--success-color);
+            color: white;
+            text-align: center;
+            border-radius: 8px;
+            padding: 16px;
+            position: fixed;
+            z-index: 100;
+            left: 50%;
+            transform: translateX(-50%);
+            bottom: 30px;
+            opacity: 0;
+            transition: opacity 0.3s, visibility 0.3s, bottom 0.3s;
+        }
+        .toast.show {
+            visibility: visible;
+            opacity: 1;
+            bottom: 50px;
+        }
+    </style>
+    <link rel="stylesheet" href="https://rsms.me/inter/inter.css">
+</head>
+<body class="p-4">
+
+    <div id="loader" class="flex justify-center items-center h-screen">
+        <div class="animate-spin rounded-full h-16 w-16 border-b-2 border-primary-color"></div>
+    </div>
+
+    <div id="app" class="hidden">
+        <!-- Header -->
+        <div class="flex justify-between items-center mb-6">
+            <h1 class="text-2xl font-bold">Admin Dashboard</h1>
+            <button id="addUserBtn" class="btn-primary text-white font-bold py-2 px-4 rounded-lg shadow-md hover:bg-blue-600 transition">
+                + Add User
+            </button>
+        </div>
+
+        <!-- Search -->
+        <div class="mb-4">
+            <input type="text" id="searchInput" placeholder="Search by name or phone..." class="w-full p-2 rounded-lg bg-gray-700 border border-gray-600 focus:outline-none focus:ring-2 focus:ring-primary-color">
+        </div>
+
+        <!-- User List -->
+        <div id="userList" class="space-y-3">
+            <!-- User cards will be injected here -->
+        </div>
+    </div>
+
+    <!-- Add/Edit User Modal -->
+    <div id="userModal" class="fixed inset-0 z-50 items-center justify-center hidden modal-backdrop">
+        <div class="modal-content w-full max-w-md p-6 rounded-lg shadow-xl">
+            <h2 id="modalTitle" class="text-xl font-bold mb-4">Add New User</h2>
+            <form id="userForm">
+                <input type="hidden" id="originalPhone">
+                <div class="mb-4">
+                    <label for="phone" class="block text-sm font-medium mb-1">Phone Number (10 digits)</label>
+                    <input type="text" id="phone" required pattern="\d{10}" class="w-full p-2 rounded-lg bg-gray-700 border border-gray-600">
+                </div>
+                <div class="mb-4">
+                    <label for="name" class="block text-sm font-medium mb-1">Full Name</label>
+                    <input type="text" id="name" required class="w-full p-2 rounded-lg bg-gray-700 border border-gray-600">
+                </div>
+                <div class="mb-4">
+                    <label for="trigger" class="block text-sm font-medium mb-1">Trigger Word</label>
+                    <input type="text" id="trigger" required class="w-full p-2 rounded-lg bg-gray-700 border border-gray-600">
+                </div>
+                <div class="flex justify-end space-x-3">
+                    <button type="button" id="cancelModalBtn" class="bg-gray-600 text-white font-bold py-2 px-4 rounded-lg">Cancel</button>
+                    <button type="submit" class="btn-primary text-white font-bold py-2 px-4 rounded-lg">Save User</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    
+    <!-- Toast Notification -->
+    <div id="toast" class="toast"></div>
+
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const tg = window.Telegram.WebApp;
+            tg.ready();
+            tg.expand();
+
+            const API_BASE_URL = 'YOUR_RENDER_BOT_URL'; // IMPORTANT: Replace with your bot's public URL
+
+            const loader = document.getElementById('loader');
+            const app = document.getElementById('app');
+            const userList = document.getElementById('userList');
+            const searchInput = document.getElementById('searchInput');
+            const addUserBtn = document.getElementById('addUserBtn');
+            const userModal = document.getElementById('userModal');
+            const modalTitle = document.getElementById('modalTitle');
+            const cancelModalBtn = document.getElementById('cancelModalBtn');
+            const userForm = document.getElementById('userForm');
+            const originalPhoneInput = document.getElementById('originalPhone');
+            const phoneInput = document.getElementById('phone');
+            const nameInput = document.getElementById('name');
+            const triggerInput = document.getElementById('trigger');
+            const toast = document.getElementById('toast');
+
+            let users = {};
+
+            const showToast = (message, type = 'success') => {
+                toast.textContent = message;
+                toast.className = `toast show ${type === 'danger' ? 'bg-red-500' : 'bg-green-500'}`;
+                setTimeout(() => {
+                    toast.className = 'toast';
+                }, 3000);
+            };
+
+            const renderUsers = (filter = '') => {
+                userList.innerHTML = '';
+                const lowerFilter = filter.toLowerCase();
+                const filteredUsers = Object.entries(users).filter(([phone, user]) => {
+                    return user.name.toLowerCase().includes(lowerFilter) || phone.includes(lowerFilter);
+                });
+
+                if (filteredUsers.length === 0) {
+                    userList.innerHTML = `<div class="text-center p-4 bg-gray-700 rounded-lg">No users found.</div>`;
+                    return;
+                }
+
+                filteredUsers.forEach(([phone, user]) => {
+                    const card = document.createElement('div');
+                    card.className = 'p-4 rounded-lg shadow-md flex justify-between items-center';
+                    card.style.backgroundColor = 'var(--card-bg)';
+                    card.innerHTML = `
+                        <div>
+                            <p class="font-bold text-lg">${user.name}</p>
+                            <p class="text-sm text-gray-400">${phone} | <span class="font-mono bg-gray-700 px-1 rounded">${user.trigger_word}</span></p>
+                        </div>
+                        <div class="flex items-center space-x-3">
+                            <label class="flex items-center cursor-pointer">
+                                <span class="mr-2 text-sm">Gift:</span>
+                                <div class="relative">
+                                    <input type="checkbox" class="sr-only gift-toggle" data-phone="${phone}" ${user.can_claim_gift ? 'checked' : ''}>
+                                    <div class="block bg-gray-600 w-12 h-6 rounded-full toggle-bg"></div>
+                                </div>
+                            </label>
+                            <button class="edit-btn text-blue-400 hover:text-blue-300" data-phone="${phone}">Edit</button>
+                            <button class="delete-btn text-red-500 hover:text-red-400" data-phone="${phone}">Delete</button>
+                        </div>
+                    `;
+                    userList.appendChild(card);
+                });
+            };
+            
+            const fetchData = async () => {
+                try {
+                    const response = await fetch(`${API_BASE_URL}/api/users`);
+                    if (!response.ok) throw new Error('Failed to fetch users');
+                    users = await response.json();
+                    renderUsers();
+                    loader.classList.add('hidden');
+                    app.classList.remove('hidden');
+                } catch (error) {
+                    loader.innerHTML = `<div class="text-center text-red-400">Error: Could not connect to the bot backend.<br>${error.message}</div>`;
+                    tg.showAlert(`Failed to load data: ${error.message}`);
+                }
+            };
+
+            const openModal = (mode, phone = null) => {
+                userForm.reset();
+                if (mode === 'edit') {
+                    const user = users[phone];
+                    modalTitle.textContent = 'Edit User';
+                    originalPhoneInput.value = phone;
+                    phoneInput.value = phone;
+                    nameInput.value = user.name;
+                    triggerInput.value = user.trigger_word;
+                } else {
+                    modalTitle.textContent = 'Add New User';
+                    originalPhoneInput.value = '';
+                }
+                userModal.style.display = 'flex';
+            };
+
+            const closeModal = () => {
+                userModal.style.display = 'none';
+            };
+            
+            const handleApiAction = async (endpoint, method, body) => {
+                try {
+                    const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+                        method,
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(body)
+                    });
+                    const result = await response.json();
+                    if (!response.ok) throw new Error(result.error || 'API action failed');
+                    
+                    showToast(result.message || 'Success!');
+                    await fetchData(); // Refresh data
+                    return true;
+                } catch (error) {
+                    showToast(error.message, 'danger');
+                    tg.showAlert(`Error: ${error.message}`);
+                    return false;
+                }
+            };
+            
+            addUserBtn.addEventListener('click', () => openModal('add'));
+            cancelModalBtn.addEventListener('click', closeModal);
+            searchInput.addEventListener('input', (e) => renderUsers(e.target.value));
+
+            userForm.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const isEdit = !!originalPhoneInput.value;
+                const endpoint = isEdit ? '/api/user/edit' : '/api/user/add';
+                const body = {
+                    originalPhone: originalPhoneInput.value,
+                    phone: phoneInput.value,
+                    name: nameInput.value,
+                    trigger: triggerInput.value.toLowerCase()
+                };
+                
+                const success = await handleApiAction(endpoint, 'POST', body);
+                if (success) closeModal();
+            });
+
+            userList.addEventListener('click', async (e) => {
+                const target = e.target;
+                const phone = target.dataset.phone;
+
+                if (target.classList.contains('edit-btn')) {
+                    openModal('edit', phone);
+                }
+                
+                if (target.classList.contains('delete-btn')) {
+                    tg.showConfirm(`Are you sure you want to delete user ${users[phone].name}?`, async (confirmed) => {
+                        if (confirmed) {
+                           await handleApiAction('/api/user/delete', 'POST', { phone });
+                        }
+                    });
+                }
+                
+                if (target.classList.contains('gift-toggle')) {
+                    const can_claim_gift = target.checked;
+                    await handleApiAction('/api/user/gift', 'POST', { phone, can_claim_gift });
+                }
+            });
+
+            fetchData();
+        });
+    </script>
+</body>
+</html>
+
