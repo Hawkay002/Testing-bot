@@ -234,17 +234,13 @@ function getMainMenu() {
 // === BOT LOGIC (USER-FACING COMMANDS & ACTIONS) ===
 // ===============================================
 
-// --- NEW: /dashboard Command (Admin Only) ---
 bot.command('dashboard', async (ctx) => {
     if (ctx.from.id !== ADMIN_CHAT_ID) return;
-    // This button launches the Mini App configured in BotFather
     await ctx.reply('Click the button below to open the new, powerful admin dashboard.', Markup.keyboard([
         [Markup.button.webApp('🚀 Launch Admin Dashboard', `${BOT_PUBLIC_BASE_URL}/dashboard.html`)]
     ]).resize());
 });
 
-
-// --- GENERAL USER COMMANDS (RESTORED) ---
 bot.start(async (ctx) => {
   await sendTypingAction(ctx);
   await ctx.reply("Hi! Send your unique secret word you just copied to get your personalized card! ❤️❤️❤️");
@@ -282,7 +278,7 @@ bot.command('request', async (ctx) => {
     );
 });
 
-// --- ADMIN REQUEST APPROVAL ACTIONS (RESTORED) ---
+// --- ADMIN REQUEST APPROVAL ACTIONS ---
 bot.action(/^admin_grant_request:/, async (ctx) => {
     if (ctx.from.id !== ADMIN_CHAT_ID) return;
     const refId = ctx.match.input.split(':')[1];
@@ -293,7 +289,6 @@ bot.action(/^admin_grant_request:/, async (ctx) => {
         await ctx.editMessageReplyMarkup(Markup.inlineKeyboard([[Markup.button.callback(`✅ GRANTED (${requestData.name})`, 'ignore')]]).reply_markup);
         await ctx.reply(`✅ Request ${refId} granted. Notifying user and adding to authorized list.`, { reply_to_message_id: ctx.callbackQuery.message.message_id });
         
-        // AUTOMATICALLY ADD USER on grant
         const newAuthorizedUsers = { ...AUTHORIZED_USERS_MAP };
         newAuthorizedUsers[requestData.phone] = { 
             name: requestData.name, 
@@ -383,8 +378,7 @@ bot.on(['photo', 'document'], async (ctx) => {
         state.state = "awaiting_payment_screenshot";
         
         await ctx.reply("✅ Card Image received. Proceeding to payment...");
-
-        // FIX #3: Restored the detailed caption
+        
         const captionHtml = `
 <b>💰 Payment Required</b>
 
@@ -410,7 +404,7 @@ For any unresolved issues or questions, use /masters_social to contact the owner
         return ctx.replyWithMarkdown("💳 After paying, please send the **payment screenshot**.\n\n⚠️ **Payment has to be done within 7 days before 11:59pm IST or the fee will be increased later.**");
     }
     
-    // FIX #4: Restored the entire, correct admin notification logic
+    // FIX #2: Restored and corrected the admin notification logic
     if (state.state === "awaiting_payment_screenshot") {
         await sendTypingAction(ctx);
         state.data.paymentScreenshotId = fileId;
@@ -472,7 +466,6 @@ Refund UPI: \`${requestData.refundUpi}\`
 });
 
 bot.on("contact", async (ctx) => {
-    // This entire contact handling flow is restored.
     const userId = ctx.from.id;
     const state = userStates[userId];
     const contact = ctx.message.contact;
@@ -487,7 +480,7 @@ bot.on("contact", async (ctx) => {
   
     if (state?.state === "awaiting_contact") {
         const { potentialPhoneNumber, potentialName } = state.data;
-        userStates[userId].state = null; // Clear state
+        userStates[userId].state = null;
         
         if (normalizedNumber === potentialPhoneNumber && AUTHORIZED_USERS_MAP[normalizedNumber]) {
             userStates[userId].data.matchedName = potentialName;
@@ -563,8 +556,8 @@ bot.on("text", async (ctx) => {
         const message = await ctx.reply("🎁 Spinning the wheel to select your shagun amount...");
         const messageId = message.message_id;
 
-        // FIX #2: Restored the spinning number animation
-        const spinDuration = 3000;
+        // FIX #1: Adjusted spin duration to 4 seconds
+        const spinDuration = 4000;
         const startTime = Date.now();
         const spinIcon = '🎰';
 
@@ -615,7 +608,6 @@ bot.action('confirm_yes', async (ctx) => {
     await ctx.replyWithSticker('CAACAgEAAxkBAAEPieBo5pIfbsOvjPZ6aGZJzuszgj_RMwACMAQAAhyYKEevQOWk5-70BjYE');
     await new Promise((r) => setTimeout(r, 1500));
     
-    // FIX #1: Restored the second sticker
     await sendTypingAction(ctx);
     await ctx.replyWithSticker('CAACAgEAAxkBAAEPf8Zo4QXOaaTjfwVq2EdaYp2t0By4UAAC-gEAAoyxIER4c3iI53gcxDYE');
     await new Promise((r) => setTimeout(r, 1500));
@@ -637,7 +629,10 @@ bot.action(/^rating_/, async (ctx) => {
   const rating = ctx.match.input.split("_")[1];
   const matchedPhone = userStates[userId]?.data?.matchedPhone;
   await ctx.editMessageText(`Thank you for your rating of ${rating} ⭐!`);
-  await ctx.telegram.sendMessage(ADMIN_CHAT_ID, `User @${ctx.from.username || ctx.from.first_name} rated ${rating} ⭐`);
+  
+  // FIX #3: Added Chat ID to the admin notification with clear labeling
+  const username = ctx.from.username || ctx.from.first_name;
+  await ctx.telegram.sendMessage(ADMIN_CHAT_ID, `User @${username} (Chat ID: \`${ctx.chat.id}\`) rated ${rating} ⭐`, { parse_mode: 'Markdown'});
   
   if (matchedPhone && AUTHORIZED_USERS_MAP[matchedPhone]?.can_claim_gift) {
     await ctx.replyWithMarkdown("Would you like a *bonus mystery gift*? 👀", Markup.inlineKeyboard([
