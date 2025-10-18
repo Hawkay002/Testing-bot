@@ -26,22 +26,32 @@
         .modal-content { background-color: var(--card-bg); }
         .btn-primary { background-color: var(--primary-color); }
         
-        /* Colored Toggle Switch Styling */
-        .toggle-bg:after {
-            content: '';
-            @apply absolute top-0.5 left-0.5 bg-white border border-gray-300 rounded-full h-5 w-5 transition-transform shadow-sm;
-        }
-        input:checked + .toggle-bg:after {
-            transform: translateX(100%);
-            @apply border-white;
-        }
-        /* Default (off) state */
+        /* === DEFINITIVE TOGGLE SWITCH FIX === */
         .toggle-bg {
-            @apply bg-red-500;
+            /* This is the background of the switch. Default to red (disabled) */
+            background-color: var(--danger-color);
+            transition: background-color 0.2s ease-in-out;
         }
-        /* Checked (on) state */
         input:checked + .toggle-bg {
-            @apply bg-green-500;
+            /* When the hidden checkbox is checked, turn the background green */
+            background-color: var(--success-color);
+        }
+        .toggle-bg::after {
+            /* This is the white sliding circle */
+            content: '';
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            background-color: white;
+            border-radius: 9999px;
+            height: 1.25rem; /* 20px */
+            width: 1.25rem;  /* 20px */
+            transition: transform 0.2s ease-in-out;
+            box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+        }
+        input:checked + .toggle-bg::after {
+            /* Move the circle to the right when checked */
+            transform: translateX(1.5rem); /* 24px */
         }
 
         .toast {
@@ -119,7 +129,7 @@
             tg.ready();
             tg.expand();
 
-            const API_BASE_URL = 'https://testing-bot-v328.onrender.com'; // IMPORTANT: Replace with your bot's public URL
+            const API_BASE_URL = 'YOUR_RENDER_BOT_URL'; // IMPORTANT: Replace with your bot's public URL
 
             const loader = document.getElementById('loader');
             const app = document.getElementById('app');
@@ -164,7 +174,8 @@
                     const card = document.createElement('div');
                     card.className = 'p-4 rounded-lg shadow-md flex justify-between items-center';
                     card.style.backgroundColor = 'var(--card-bg)';
-                    const isGiftEnabled = user.can_claim_gift === undefined ? true : user.can_claim_gift; // Default to true if not present
+                    // Default to true if can_claim_gift is not present in the JSON
+                    const isGiftEnabled = user.can_claim_gift === undefined ? true : user.can_claim_gift;
                     card.innerHTML = `
                         <div>
                             <p class="font-bold text-lg">${user.name}</p>
@@ -175,7 +186,7 @@
                                 <span class="mr-2 text-sm">Gift:</span>
                                 <div class="relative">
                                     <input type="checkbox" class="sr-only gift-toggle" data-phone="${phone}" ${isGiftEnabled ? 'checked' : ''}>
-                                    <div class="block w-12 h-6 rounded-full toggle-bg"></div>
+                                    <div class="block w-12 h-7 rounded-full toggle-bg"></div>
                                 </div>
                             </label>
                             <button class="edit-btn text-blue-400 hover:text-blue-300 text-lg" data-phone="${phone}"><i class="fas fa-pencil-alt" data-phone="${phone}"></i></button>
@@ -281,7 +292,6 @@
                     });
                 }
                 if (e.target.classList.contains('gift-toggle')) {
-                    // Let the default checkbox behavior handle the state change
                     await handleApiAction('/api/user/gift', 'POST', { phone, can_claim_gift: e.target.checked });
                 }
             });
@@ -291,3 +301,5 @@
     </script>
 </body>
 </html>
+
+
