@@ -376,7 +376,7 @@ bot.action(/^admin_decline_final:/, async (ctx) => {
     const requestData = pendingRequests[refId];
     if (!requestData) return ctx.reply(`❌ Error: Request ID \`${refId}\` not found.`);
 
-    const userMessage = `❌ **Your request has been declined.**\n${reason ? `Reason: *${reason}*\n` : ''}Your payment of ₹${REQUEST_FEE} will be refunded to your UPI ID (\`${requestData.refundUpi}\`) within 24 hours.`;
+    const userMessage = `❌ **Your request has been declined.**\n${reason ? `Reason: *${reason}*\n` : ''}Your full payment will be refunded to your UPI ID (\`${requestData.refundUpi}\`) within 24 hours.`;
     await ctx.telegram.sendMessage(requestData.userId, userMessage, { parse_mode: 'Markdown' });
     await ctx.reply(`✅ Request ${refId} successfully declined. User notified.`, { reply_to_message_id: userStates[ADMIN_CHAT_ID]?.data?.originalMessageId });
     delete userStates[ADMIN_CHAT_ID];
