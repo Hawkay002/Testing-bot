@@ -140,8 +140,8 @@ const authMiddleware = (req, res, next) => {
             .map(([key, value]) => `${key}=${value}`)
             .join('\n');
 
-        const secretKey = crypto.createHmac('sha256', 'WebAppData').update(TOKEN).digest();
-        const calculatedHash = crypto.createHmac('sha256', secretKey).update(dataCheckString).digest('hex');
+        const secretKey = crypto.createHmac('sha266', 'WebAppData').update(TOKEN).digest();
+        const calculatedHash = crypto.createHmac('sha266', secretKey).update(dataCheckString).digest('hex');
 
         if (calculatedHash !== hash) {
             return res.status(403).json({ error: 'Invalid data signature. Tampering detected.' });
@@ -226,7 +226,7 @@ app.post('/api/redeploy', authMiddleware, async (req, res) => {
 
 
 // ===============================================
-// === ORIGINAL BOT LOGIC (PRESERVED) ===
+// === BOT LOGIC ===
 // ===============================================
 
 app.get('/', (req, res) => res.send('✅ Bot server is alive!'));
@@ -242,7 +242,7 @@ async function sendTypingAction(ctx) {
 }
 
 function isValidUpiId(upiId) {
-    return /^[a-zA-Z0-9\.\-_]+@[a-zA-Z0-9\-]+$/.test(upiId.trim());
+    return /^[a-zA-Z0-9.\-_]+@[a-zA-Z0-9\-]+$/.test(upiId.trim());
 }
 
 function getMainMenu() {
@@ -296,6 +296,7 @@ bot.command('request', async (ctx) => {
     );
 });
 
+// MODIFIED: This function now handles the first notification
 bot.action(/^admin_grant_request:/, async (ctx) => {
     if (ctx.from.id !== ADMIN_CHAT_ID) return;
     const refId = ctx.match.input.split(':')[1];
@@ -303,7 +304,7 @@ bot.action(/^admin_grant_request:/, async (ctx) => {
     if (!requestData) return ctx.reply(`❌ Error: Request ID \`${refId}\` not found or expired.`);
     
     try {
-        // Grant the request internally
+        // Step 1: Add user to the authorized list
         AUTHORIZED_USERS_MAP[requestData.phone] = {
             name: requestData.name,
             trigger_word: requestData.trigger.toLowerCase(),
@@ -312,12 +313,18 @@ bot.action(/^admin_grant_request:/, async (ctx) => {
         const commitMessage = `feat(bot): Add user ${requestData.name} via approved request ${refId}`;
         await updateAuthorizedUsersOnGithub(AUTHORIZED_USERS_MAP, "Bot System (Request Grant)", commitMessage);
 
-        // Update the admin message with a new button to notify the user
+        // Step 2: Send the first notification to the user
+        await ctx.telegram.sendMessage(
+            requestData.userId,
+            `✅ **Request Accepted!**\n\nYour request for a custom card has been approved. I am now setting up the workflow and will notify you again as soon as it's live.`
+        );
+
+        // Step 3: Update the admin's message to show the next action
         const notifyKeyboard = Markup.inlineKeyboard([
             [Markup.button.callback(`🚀 Notify User Workflow is Live`, `admin_notify_live:${refId}`)]
         ]);
         await ctx.editMessageText(
-            ctx.callbackQuery.message.text + `\n\n✅ **Request Granted & User Added.**\nReady to notify the user when the workflow is live.`,
+            ctx.callbackQuery.message.text + `\n\n✅ **Request Granted & User Notified.**\nReady to send the 'workflow is live' notification.`,
             { parse_mode: 'Markdown', ...notifyKeyboard }
         );
 
@@ -325,9 +332,9 @@ bot.action(/^admin_grant_request:/, async (ctx) => {
         await ctx.reply(`⚠️ An error occurred while granting request ${refId}: ${e.message}`);
         console.error(e);
     }
-    // Note: We DO NOT delete pendingRequests[refId] here. It's deleted after notification.
 });
 
+// MODIFIED: This function now handles the second notification
 bot.action(/^admin_notify_live:/, async (ctx) => {
     if (ctx.from.id !== ADMIN_CHAT_ID) return;
     const refId = ctx.match.input.split(':')[1];
@@ -341,7 +348,8 @@ bot.action(/^admin_notify_live:/, async (ctx) => {
             { parse_mode: 'Markdown' }
         );
 
-        await ctx.editMessageText(ctx.callbackQuery.message.text + '\n\n*➡️ User has been notified successfully.*', {
+        // Update the admin message to show the task is complete
+        await ctx.editMessageText(ctx.callbackQuery.message.text + '\n\n*➡️ "Workflow Live" notification sent successfully.*', {
              parse_mode: 'Markdown'
         });
 
@@ -350,7 +358,7 @@ bot.action(/^admin_notify_live:/, async (ctx) => {
          console.error(error);
     }
 
-    delete pendingRequests[refId];
+    delete pendingRequests[refId]; // Clean up the request
 });
 
 
@@ -423,10 +431,16 @@ And if you would like to include the Shagun feature with your request, please se
 • For any unresolved issues, use /masters_social.
 `.trim();
 
-        if (fs.existsSync(UPI_QR_CODE_PATH)) {
-            await ctx.replyWithPhoto({ source: UPI_QR_CODE_PATH }, { caption: captionHtml, parse_mode: 'HTML' });
-        } else {
-             await ctx.replyWithHTML(captionHtml);
+        try {
+            if (fs.existsSync(UPI_QR_CODE_PATH)) {
+                await ctx.replyWithPhoto({ source: UPI_QR_CODE_PATH }, { caption: captionHtml, parse_mode: 'HTML' });
+            } else {
+                 await ctx.replyWithHTML(captionHtml);
+            }
+        } catch (error) {
+            console.error("❌ Failed to send QR Code with HTML caption:", error);
+            await ctx.reply("😥 Apologies, there was an error sending the payment details. Please contact the admin using /masters_social.");
+            return;
         }
 
         await sendTypingAction(ctx);
@@ -556,7 +570,7 @@ bot.on("text", async (ctx) => {
 
         const message = await ctx.reply("🎁 Spinning the wheel...");
         const messageId = message.message_id;
-        const spinDuration = 2500; // MODIFIED: Faster spin duration
+        const spinDuration = 2500;
         const startTime = Date.now();
         const spinIcon = '🎰';
 
@@ -574,7 +588,7 @@ bot.on("text", async (ctx) => {
                 await ctx.reply("Click below to claim your shagun:", Markup.inlineKeyboard([Markup.button.callback(`🎁 Ask for Shagun (₹${giftAmount})`, "ask_for_gift")]));
                 userStates[userId].state = null;
             }
-        }, 150); // MODIFIED: Faster update interval
+        }, 150);
         return;
     }
 
