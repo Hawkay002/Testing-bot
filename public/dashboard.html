@@ -199,11 +199,13 @@
                         headers: { 'X-Telegram-Init-Data': initData }
                     });
                     
+                    // --- MODIFIED: Handle specific errors and show detailed messages ---
                     if (response.status === 401 || response.status === 403) {
+                         const errorResult = await response.json();
                          app.innerHTML = `<div class="text-center text-red-400 p-8 bg-red-900/50 rounded-lg">
                             <i class="fas fa-lock text-4xl mb-4"></i>
                             <h2 class="text-2xl font-bold">Access Denied</h2>
-                            <p>You are not authorized to view this dashboard.</p>
+                            <p>${errorResult.error || 'You are not authorized to view this dashboard.'}</p>
                          </div>`;
                          app.classList.remove('hidden');
                          loader.classList.add('hidden');
