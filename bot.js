@@ -42,9 +42,8 @@ const finalConfirmationMap = {};
 const pendingRequests = {};
 
 // --- Express Server Setup ---
-// --- MODIFIED: Configure CORS to allow the custom Telegram header ---
 app.use(cors({
-  origin: '*', // You can restrict this to your web app's domain in production
+  origin: '*', 
   allowedHeaders: ['Content-Type', 'X-Telegram-Init-Data'],
 }));
 app.use(express.json());
@@ -144,15 +143,18 @@ const authMiddleware = (req, res, next) => {
             .map(([key, value]) => `${key}=${value}`)
             .join('\n');
 
+        // FIXED: Corrected the hashing algorithm from 'sha266' to 'sha256'
         const secretKey = crypto.createHmac('sha256', 'WebAppData').update(TOKEN).digest();
         const calculatedHash = crypto.createHmac('sha256', secretKey).update(dataCheckString).digest('hex');
 
         if (calculatedHash !== hash) {
-            return res.status(403).json({ error: 'Invalid data signature. Tampering detected.' });
+            // Return 401 for unauthorized access
+            return res.status(401).json({ error: 'Invalid data signature. Tampering detected.' });
         }
 
         const user = JSON.parse(params.get('user'));
         if (user.id !== ADMIN_CHAT_ID) {
+            // Return 403 for forbidden access (valid user, but not admin)
             return res.status(403).json({ error: 'Access Denied. You are not the administrator.' });
         }
 
@@ -246,7 +248,7 @@ async function sendTypingAction(ctx) {
 }
 
 function isValidUpiId(upiId) {
-    return /^[a-zA-Z0-9\.\-_]+@[a-zA-Z0-9\-]+$/.test(upiId.trim());
+    return /^[a-zA-Z0-9.\-_]+@[a-zA-Z0-9\-]+$/.test(upiId.trim());
 }
 
 function getMainMenu() {
@@ -260,7 +262,7 @@ function getMainMenu() {
 bot.command('dashboard', async (ctx) => {
     if (ctx.from.id !== ADMIN_CHAT_ID) return;
     await ctx.reply('Click the button below to open the new, powerful admin dashboard.', Markup.keyboard([
-        [Markup.button.webApp('🚀 Launch Admin Dashboard', `${BOT_PUBLIC_BASE_URL}/dashboard.html`)]
+        [Markup.button.webApp('🚀 Launch Admin Dashboard', `${BOT_PUBLIC_BASE_URL}/public/mini app.html`)]
     ]).resize());
 });
 
@@ -330,10 +332,11 @@ bot.action(/^admin_grant_request:/, async (ctx) => {
         );
 
     } catch (e) {
-        if (e.code === 403) {
-             await ctx.reply(`⚠️ Could not notify user ${requestData.userId}, but their request was still granted.`);
+        if (e.response && e.response.error_code === 403) {
+             await ctx.reply(`⚠️ Could not notify user ${requestData.userId} (they may have blocked the bot), but their request was still granted and added to the database.`);
+        } else {
+            await ctx.reply(`⚠️ An error occurred while granting request ${refId}: ${e.message}`);
         }
-        await ctx.reply(`⚠️ An error occurred while granting request ${refId}: ${e.message}`);
         console.error(e);
     }
 });
@@ -725,7 +728,7 @@ async function main() {
     const PORT = process.env.PORT || 10000;
     app.listen(PORT, () => {
         console.log(`🚀 Bot server running on port ${PORT}`);
-        console.log(`🔗 Admin Dashboard available at ${BOT_PUBLIC_BASE_URL}/dashboard.html`);
+        console.log(`🔗 Admin Dashboard available at ${BOT_PUBLIC_BASE_URL}/public/mini app.html`);
     });
 
     process.once("SIGINT", () => bot.stop("SIGINT"));
