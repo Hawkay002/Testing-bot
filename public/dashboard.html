@@ -122,6 +122,7 @@
             const tg = window.Telegram.WebApp;
             tg.ready();
             tg.expand();
+            const initData = tg.initData;
 
             const API_BASE_URL = 'https://testing-bot-v328.onrender.com'; // IMPORTANT: Replace with your bot's public URL
 
@@ -194,7 +195,18 @@
                 try {
                     loader.classList.remove('hidden');
                     app.classList.add('hidden');
-                    const response = await fetch(`${API_BASE_URL}/api/users`);
+                    const response = await fetch(`${API_BASE_URL}/api/users`, {
+                        headers: { 'X-Telegram-Init-Data': initData }
+                    });
+                    if (response.status === 403) {
+                         app.innerHTML = `<div class="text-center text-red-400 p-8 bg-red-900/50 rounded-lg">
+                            <i class="fas fa-lock text-4xl mb-4"></i>
+                            <h2 class="text-2xl font-bold">Access Denied</h2>
+                            <p>You are not authorized to view this dashboard.</p>
+                         </div>`;
+                         app.classList.remove('hidden');
+                         return;
+                    }
                     if (!response.ok) throw new Error('Failed to fetch users');
                     users = await response.json();
                     renderUsers();
@@ -228,7 +240,10 @@
                 try {
                     const response = await fetch(`${API_BASE_URL}${endpoint}`, {
                         method,
-                        headers: { 'Content-Type': 'application/json' },
+                        headers: { 
+                            'Content-Type': 'application/json',
+                            'X-Telegram-Init-Data': initData
+                        },
                         body: JSON.stringify(body)
                     });
                     const result = await response.json();
@@ -240,13 +255,12 @@
                         users = result.users;
                         renderUsers(searchInput.value);
                     } else {
-                        await fetchData();
+                         // This fallback is now only for actions that don't need a UI update, like redeploy
                     }
                     return true;
                 } catch (error) {
                     showToast(error.message, 'danger');
                     tg.showAlert(`Error: ${error.message}`);
-                    await fetchData(); // On failure, resync with the server's master state
                     return false;
                 }
             };
@@ -256,11 +270,17 @@
             searchInput.addEventListener('input', (e) => renderUsers(e.target.value));
 
             redeployBtn.addEventListener('click', () => {
-                tg.showConfirm('Are you sure you want to redeploy the bot? This will restart the service with the latest code from GitHub.', async (ok) => {
+                tg.showConfirm('Are you sure you want to redeploy the bot?', async (ok) => {
                     if (ok) {
                         showToast('Triggering redeploy...', 'info', 5000);
                          try {
-                            const response = await fetch(`${API_BASE_URL}/api/redeploy`, { method: 'POST' });
+                            const response = await fetch(`${API_BASE_URL}/api/redeploy`, { 
+                                method: 'POST',
+                                headers: { 
+                                    'Content-Type': 'application/json',
+                                    'X-Telegram-Init-Data': initData
+                                }
+                             });
                             const result = await response.json();
                              if (!response.ok) throw new Error(result.error || 'API action failed');
                              showToast(result.message, 'info', 5000);
@@ -309,5 +329,3 @@
     </script>
 </body>
 </html>
-
-
