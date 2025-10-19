@@ -4,6 +4,7 @@ import fs from "fs";
 import cors from "cors";
 import path from "path";
 import { fileURLToPath } from 'url';
+import crypto from 'crypto';
 
 // === Bot Configuration ===
 const TOKEN = process.env.BOT_TOKEN;
@@ -12,7 +13,6 @@ if (!TOKEN) {
   process.exit(1);
 }
 
-// ⚠️ IMPORTANT: Update these based on your GitHub setup ⚠️
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN; 
 const GITHUB_OWNER = process.env.GITHUB_OWNER || 'Hawkay002'; 
 const GITHUB_REPO = process.env.GITHUB_REPO || 'Testing-bot'; 
@@ -50,9 +50,9 @@ const __dirname = path.dirname(__filename);
 app.use(express.static(path.join(__dirname, 'public')));
 
 
-// === GitHub Functions (from original, adapted for dashboard) ===
+// === GitHub Functions ===
 async function loadAuthorizedUsers() {
-    console.log(`📡 Fetching authorized users from: ${GITHUB_USERS_URL}`);
+    console.log(`📡 Fetching initial authorized users from: ${GITHUB_USERS_URL}`);
     try {
         const contentResponse = await fetch(GITHUB_USERS_URL, { cache: 'no-store' });
         if (!contentResponse.ok) throw new Error(`Failed to fetch raw content. HTTP status: ${contentResponse.status}`);
@@ -123,12 +123,48 @@ async function updateAuthorizedUsersOnGithub(newContent, committerName, commitMe
 }
 
 // ===============================================
-// === NEW: MINI APP API ENDPOINTS ===
+// === SECURITY MIDDLEWARE ===
+// ===============================================
+const authMiddleware = (req, res, next) => {
+    const initDataString = req.headers['x-telegram-init-data'];
+    if (!initDataString) {
+        return res.status(401).json({ error: 'Authentication data not provided.' });
+    }
+
+    try {
+        const params = new URLSearchParams(initDataString);
+        const hash = params.get('hash');
+        params.delete('hash');
+        const dataCheckString = Array.from(params.entries())
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([key, value]) => `${key}=${value}`)
+            .join('\n');
+
+        const secretKey = crypto.createHmac('sha256', 'WebAppData').update(TOKEN).digest();
+        const calculatedHash = crypto.createHmac('sha256', secretKey).update(dataCheckString).digest('hex');
+
+        if (calculatedHash !== hash) {
+            return res.status(403).json({ error: 'Invalid data signature. Tampering detected.' });
+        }
+
+        const user = JSON.parse(params.get('user'));
+        if (user.id !== ADMIN_CHAT_ID) {
+            return res.status(403).json({ error: 'Access Denied. You are not the administrator.' });
+        }
+        
+        next();
+    } catch (error) {
+        return res.status(500).json({ error: 'Internal server error during authentication.' });
+    }
+};
+
+// ===============================================
+// === MINI APP API ENDPOINTS (SECURED) ===
 // ===============================================
 
-app.get('/api/users', (req, res) => res.json(AUTHORIZED_USERS_MAP));
+app.get('/api/users', authMiddleware, (req, res) => res.json(AUTHORIZED_USERS_MAP));
 
-app.post('/api/user/add', async (req, res) => {
+app.post('/api/user/add', authMiddleware, async (req, res) => {
     try {
         const { phone, name, trigger } = req.body;
         AUTHORIZED_USERS_MAP[phone] = { name, trigger_word: trigger, can_claim_gift: true };
@@ -137,7 +173,7 @@ app.post('/api/user/add', async (req, res) => {
     } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-app.post('/api/user/edit', async (req, res) => {
+app.post('/api/user/edit', authMiddleware, async (req, res) => {
     try {
         const { originalPhone, phone, name, trigger } = req.body;
         const userData = { ...AUTHORIZED_USERS_MAP[originalPhone], name, trigger_word: trigger };
@@ -150,7 +186,7 @@ app.post('/api/user/edit', async (req, res) => {
     } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-app.post('/api/user/delete', async (req, res) => {
+app.post('/api/user/delete', authMiddleware, async (req, res) => {
     try {
         const { phone } = req.body;
         delete AUTHORIZED_USERS_MAP[phone];
@@ -159,7 +195,7 @@ app.post('/api/user/delete', async (req, res) => {
     } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-app.post('/api/user/gift', async (req, res) => {
+app.post('/api/user/gift', authMiddleware, async (req, res) => {
     try {
         const { phone, can_claim_gift } = req.body;
         if(AUTHORIZED_USERS_MAP[phone]) {
@@ -171,7 +207,7 @@ app.post('/api/user/gift', async (req, res) => {
     } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-app.post('/api/redeploy', async (req, res) => {
+app.post('/api/redeploy', authMiddleware, async (req, res) => {
     if (!RENDER_DEPLOY_HOOK) {
         return res.status(500).json({ error: "RENDER_DEPLOY_HOOK is not set on the server." });
     }
@@ -324,9 +360,6 @@ bot.action(/^admin_decline_final:/, async (ctx) => {
     delete pendingRequests[refId];
 });
 
-// =========================================================================================
-// === YOUR ORIGINAL, WORKING PHOTO/DOCUMENT HANDLER - RESTORED VERBATIM ===
-// =========================================================================================
 bot.on(['photo', 'document'], async (ctx) => {
     const userId = ctx.from.id;
     const isPhoto = ctx.message.photo;
@@ -341,7 +374,7 @@ bot.on(['photo', 'document'], async (ctx) => {
     } else if (isDocument && isDocument.mime_type?.startsWith('image')) {
         fileId = isDocument.file_id;
     } else {
-        return; // Ignore non-image documents
+        return;
     }
 
     const state = userStates[userId];
@@ -536,8 +569,6 @@ bot.on("text", async (ctx) => {
     }
 });
 
-
-// === INLINE KEYBOARD ACTIONS (from original) ===
 bot.action('confirm_yes', async (ctx) => {
     const userId = ctx.from.id;
     const matchedName = userStates[userId]?.data?.matchedName || "the user";
