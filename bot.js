@@ -258,7 +258,7 @@ function getMainMenu() {
 
 bot.command('dashboard', async (ctx) => {
     if (ctx.from.id !== ADMIN_CHAT_ID) return;
-    // MODIFIED: Point to dashboard.html
+    // FIXED: The URL should NOT include '/public/'
     await ctx.reply('Click the button below to open the new, powerful admin dashboard.', Markup.keyboard([
         [Markup.button.webApp('🚀 Launch Admin Dashboard', `${BOT_PUBLIC_BASE_URL}/dashboard.html`)]
     ]).resize());
@@ -726,7 +726,6 @@ async function main() {
     const PORT = process.env.PORT || 10000;
     app.listen(PORT, () => {
         console.log(`🚀 Bot server running on port ${PORT}`);
-        // MODIFIED: Point to dashboard.html
         console.log(`🔗 Admin Dashboard available at ${BOT_PUBLIC_BASE_URL}/dashboard.html`);
     });
 
