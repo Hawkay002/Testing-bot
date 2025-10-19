@@ -42,7 +42,11 @@ const finalConfirmationMap = {};
 const pendingRequests = {};
 
 // --- Express Server Setup ---
-app.use(cors());
+// --- MODIFIED: Configure CORS to allow the custom Telegram header ---
+app.use(cors({
+  origin: '*', // You can restrict this to your web app's domain in production
+  allowedHeaders: ['Content-Type', 'X-Telegram-Init-Data'],
+}));
 app.use(express.json());
 
 const __filename = fileURLToPath(import.meta.url);
@@ -303,14 +307,12 @@ bot.action(/^admin_grant_request:/, async (ctx) => {
     if (!requestData) return ctx.reply(`❌ Error: Request ID \`${refId}\` not found or expired.`);
     
     try {
-        // --- MODIFIED: Notify user immediately ---
         await ctx.telegram.sendMessage(
             requestData.userId,
             "✅ **Request Accepted!**\n\nYour request has been approved. Your details are now being added to the database. You'll receive a final notification once your personalized workflow is ready to use.",
             { parse_mode: 'Markdown' }
         );
 
-        // Grant the request internally
         AUTHORIZED_USERS_MAP[requestData.phone] = {
             name: requestData.name,
             trigger_word: requestData.trigger.toLowerCase(),
@@ -319,7 +321,6 @@ bot.action(/^admin_grant_request:/, async (ctx) => {
         const commitMessage = `feat(bot): Add user ${requestData.name} via approved request ${refId}`;
         await updateAuthorizedUsersOnGithub(AUTHORIZED_USERS_MAP, "Bot System (Request Grant)", commitMessage);
 
-        // Update the admin message with a new button to notify the user
         const notifyKeyboard = Markup.inlineKeyboard([
             [Markup.button.callback(`🚀 Notify User Workflow is Live`, `admin_notify_live:${refId}`)]
         ]);
@@ -329,13 +330,12 @@ bot.action(/^admin_grant_request:/, async (ctx) => {
         );
 
     } catch (e) {
-        if (e.code === 403) { // User might have blocked the bot
+        if (e.code === 403) {
              await ctx.reply(`⚠️ Could not notify user ${requestData.userId}, but their request was still granted.`);
         }
         await ctx.reply(`⚠️ An error occurred while granting request ${refId}: ${e.message}`);
         console.error(e);
     }
-    // Note: We DO NOT delete pendingRequests[refId] here. It's deleted after notification.
 });
 
 bot.action(/^admin_notify_live:/, async (ctx) => {
@@ -566,7 +566,7 @@ bot.on("text", async (ctx) => {
 
         const message = await ctx.reply("🎁 Spinning the wheel...");
         const messageId = message.message_id;
-        const spinDuration = 2500; // MODIFIED: Faster spin duration
+        const spinDuration = 2500;
         const startTime = Date.now();
         const spinIcon = '🎰';
 
@@ -584,7 +584,7 @@ bot.on("text", async (ctx) => {
                 await ctx.reply("Click below to claim your shagun:", Markup.inlineKeyboard([Markup.button.callback(`🎁 Ask for Shagun (₹${giftAmount})`, "ask_for_gift")]));
                 userStates[userId].state = null;
             }
-        }, 150); // MODIFIED: Faster update interval
+        }, 150);
         return;
     }
 
