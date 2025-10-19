@@ -303,6 +303,13 @@ bot.action(/^admin_grant_request:/, async (ctx) => {
     if (!requestData) return ctx.reply(`❌ Error: Request ID \`${refId}\` not found or expired.`);
     
     try {
+        // --- MODIFIED: Notify user immediately ---
+        await ctx.telegram.sendMessage(
+            requestData.userId,
+            "✅ **Request Accepted!**\n\nYour request has been approved. Your details are now being added to the database. You'll receive a final notification once your personalized workflow is ready to use.",
+            { parse_mode: 'Markdown' }
+        );
+
         // Grant the request internally
         AUTHORIZED_USERS_MAP[requestData.phone] = {
             name: requestData.name,
@@ -317,11 +324,14 @@ bot.action(/^admin_grant_request:/, async (ctx) => {
             [Markup.button.callback(`🚀 Notify User Workflow is Live`, `admin_notify_live:${refId}`)]
         ]);
         await ctx.editMessageText(
-            ctx.callbackQuery.message.text + `\n\n✅ **Request Granted & User Added.**\nReady to notify the user when the workflow is live.`,
+            ctx.callbackQuery.message.text + `\n\n✅ **Request Granted & User Added.**\nUser has been notified about the acceptance. Ready to notify when the workflow is live.`,
             { parse_mode: 'Markdown', ...notifyKeyboard }
         );
 
     } catch (e) {
+        if (e.code === 403) { // User might have blocked the bot
+             await ctx.reply(`⚠️ Could not notify user ${requestData.userId}, but their request was still granted.`);
+        }
         await ctx.reply(`⚠️ An error occurred while granting request ${refId}: ${e.message}`);
         console.error(e);
     }
