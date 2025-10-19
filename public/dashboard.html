@@ -124,7 +124,9 @@
             tg.expand();
             const initData = tg.initData;
 
-            const API_BASE_URL = 'https://testing-bot-v328.onrender.com'; // IMPORTANT: Replace with your bot's public URL
+            // --- MODIFIED: Use a relative URL for the API ---
+            // This makes the dashboard automatically work with your server's address.
+            const API_BASE_URL = ''; 
 
             const loader = document.getElementById('loader');
             const app = document.getElementById('app');
@@ -205,14 +207,16 @@
                             <p>You are not authorized to view this dashboard.</p>
                          </div>`;
                          app.classList.remove('hidden');
+                         loader.classList.add('hidden'); // Also hide loader here
                          return;
                     }
-                    if (!response.ok) throw new Error('Failed to fetch users');
+                    if (!response.ok) throw new Error(`Network response was not ok (${response.status})`);
                     users = await response.json();
                     renderUsers();
                     app.classList.remove('hidden');
                 } catch (error) {
                     app.innerHTML = `<div class="text-center text-red-400 p-4 bg-red-900/50 rounded-lg">Error: Could not connect to the bot backend.<br>${error.message}</div>`;
+                    app.classList.remove('hidden');
                 } finally {
                     loader.classList.add('hidden');
                 }
@@ -329,3 +333,4 @@
     </script>
 </body>
 </html>
+
