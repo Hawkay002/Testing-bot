@@ -13,37 +13,37 @@ if (!TOKEN) {
   process.exit(1);
 }
 
-const GITHUB_TOKEN = process.env.GITHUB_TOKEN; 
-const GITHUB_OWNER = process.env.GITHUB_OWNER || 'Hawkay002'; 
-const GITHUB_REPO = process.env.GITHUB_REPO || 'Testing-bot'; 
-const GITHUB_FILE_PATH = process.env.GITHUB_FILE_PATH || 'authorized_users.json'; 
+const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
+const GITHUB_OWNER = process.env.GITHUB_OWNER || 'Hawkay002';
+const GITHUB_REPO = process.env.GITHUB_REPO || 'Testing-bot';
+const GITHUB_FILE_PATH = process.env.GITHUB_FILE_PATH || 'authorized_users.json';
 const GITHUB_USERS_URL = `https://raw.githubusercontent.com/${GITHUB_OWNER}/${GITHUB_REPO}/main/${GITHUB_FILE_PATH}`;
-const BOT_PUBLIC_BASE_URL = process.env.RENDER_EXTERNAL_URL; 
+const BOT_PUBLIC_BASE_URL = process.env.RENDER_EXTERNAL_URL;
 const RENDER_DEPLOY_HOOK = process.env.RENDER_DEPLOY_HOOK;
 
-const IMAGE_PATH = "Wishing Birthday.jpg"; 
-const UPI_QR_CODE_PATH = "upi_qr_code.png"; 
+const IMAGE_PATH = "Wishing Birthday.jpg";
+const UPI_QR_CODE_PATH = "upi_qr_code.png";
 const REQUEST_FEE = 50;
 
 let AUTHORIZED_USERS_MAP = {};
-let GITHUB_FILE_SHA = null; 
+let GITHUB_FILE_SHA = null;
 
-const ADMIN_CHAT_ID = 1299129410; 
+const ADMIN_CHAT_ID = 1299129410;
 const START_TIME = Date.now();
-const BOT_ADMIN_VPA = "8777845713@upi"; 
+const BOT_ADMIN_VPA = "8777845713@upi";
 
 const bot = new Telegraf(TOKEN);
 const app = express();
 
-const userStates = {}; 
-const pendingGifts = {}; 
-const redirectLinkStore = {}; 
+const userStates = {};
+const pendingGifts = {};
+const redirectLinkStore = {};
 const finalConfirmationMap = {};
 const pendingRequests = {};
 
 // --- Express Server Setup ---
-app.use(cors()); 
-app.use(express.json()); 
+app.use(cors());
+app.use(express.json());
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -57,12 +57,12 @@ async function loadAuthorizedUsers() {
         const contentResponse = await fetch(GITHUB_USERS_URL, { cache: 'no-store' });
         if (!contentResponse.ok) throw new Error(`Failed to fetch raw content. HTTP status: ${contentResponse.status}`);
         const data = await contentResponse.json();
-        
+
         const metadataUrl = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${GITHUB_FILE_PATH}`;
         const metadataResponse = await fetch(metadataUrl, { headers: { 'Authorization': `token ${GITHUB_TOKEN}` } });
         if (!metadataResponse.ok) throw new Error(`Failed to fetch file metadata (SHA). HTTP status: ${metadataResponse.status}`);
         const metadata = await metadataResponse.json();
-        
+
         if (typeof data === 'object' && data !== null && metadata.sha) {
             const normalizedData = Object.fromEntries(
                 Object.entries(data).map(([phone, userData]) => [phone, { ...userData, can_claim_gift: userData.can_claim_gift !== false }])
@@ -81,7 +81,7 @@ async function loadAuthorizedUsers() {
 
 async function updateAuthorizedUsersOnGithub(newContent, committerName, commitMessage) {
     if (!GITHUB_TOKEN) throw new Error("GITHUB_TOKEN environment variable is not set.");
-    
+
     const metadataUrl = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${GITHUB_FILE_PATH}`;
     const metadataResponse = await fetch(metadataUrl, { headers: { 'Authorization': `token ${GITHUB_TOKEN}` } });
     if (!metadataResponse.ok) throw new Error(`Failed to fetch latest SHA. Status: ${metadataResponse.status}`);
@@ -91,11 +91,11 @@ async function updateAuthorizedUsersOnGithub(newContent, committerName, commitMe
     const contentToCommit = {};
     for (const [phone, userData] of Object.entries(newContent)) {
         const cleanedUserData = { ...userData };
-        delete cleanedUserData.matchedPhone; 
+        delete cleanedUserData.matchedPhone;
         if (cleanedUserData.can_claim_gift === true) delete cleanedUserData.can_claim_gift;
         contentToCommit[phone] = cleanedUserData;
     }
-    
+
     const contentEncoded = Buffer.from(JSON.stringify(contentToCommit, null, 2)).toString('base64');
     const apiUrl = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${GITHUB_FILE_PATH}`;
     const payload = {
@@ -104,7 +104,7 @@ async function updateAuthorizedUsersOnGithub(newContent, committerName, commitMe
         sha: GITHUB_FILE_SHA,
         committer: { name: committerName, email: 'telegram-bot-dashboard@hawkay.com' }
     };
-    
+
     const response = await fetch(apiUrl, {
         method: 'PUT',
         headers: { 'Authorization': `token ${GITHUB_TOKEN}`, 'Content-Type': 'application/json', 'User-Agent': 'Telegraf-Bot-Dashboard' },
@@ -151,7 +151,7 @@ const authMiddleware = (req, res, next) => {
         if (user.id !== ADMIN_CHAT_ID) {
             return res.status(403).json({ error: 'Access Denied. You are not the administrator.' });
         }
-        
+
         next();
     } catch (error) {
         return res.status(500).json({ error: 'Internal server error during authentication.' });
@@ -272,8 +272,7 @@ bot.command('masters_social', async (ctx) => {
         Markup.inlineKeyboard([
             [Markup.button.url("WhatsApp", "https://wa.me/918777845713")],
             [Markup.button.url("Telegram", "https://t.me/X_o_x_o_002")],
-            [Markup.button.url("Website", "https://hawkay002.github.io/Connect/")],
-            [Markup.button.callback("⬅️ Back", "back_to_menu")]
+            [Markup.button.url("Website", "https://hawkay002.github.io/Connect/")]
         ])
     );
 });
@@ -304,41 +303,65 @@ bot.action(/^admin_grant_request:/, async (ctx) => {
     if (!requestData) return ctx.reply(`❌ Error: Request ID \`${refId}\` not found or expired.`);
     
     try {
-        await ctx.editMessageReplyMarkup(Markup.inlineKeyboard([[Markup.button.callback(`✅ GRANTED (${requestData.name})`, 'ignore')]]).reply_markup);
-        await ctx.reply(`✅ Request ${refId} granted. Notifying user and adding to authorized list.`, { reply_to_message_id: ctx.callbackQuery.message.message_id });
-        
-        AUTHORIZED_USERS_MAP[requestData.phone] = { 
-            name: requestData.name, 
+        // Grant the request internally
+        AUTHORIZED_USERS_MAP[requestData.phone] = {
+            name: requestData.name,
             trigger_word: requestData.trigger.toLowerCase(),
             can_claim_gift: true
         };
         const commitMessage = `feat(bot): Add user ${requestData.name} via approved request ${refId}`;
-        updateAuthorizedUsersOnGithub(AUTHORIZED_USERS_MAP, "Bot System (Request Grant)", commitMessage).catch(console.error);
-        
+        await updateAuthorizedUsersOnGithub(AUTHORIZED_USERS_MAP, "Bot System (Request Grant)", commitMessage);
+
+        // Update the admin message with a new button to notify the user
+        const notifyKeyboard = Markup.inlineKeyboard([
+            [Markup.button.callback(`🚀 Notify User Workflow is Live`, `admin_notify_live:${refId}`)]
+        ]);
+        await ctx.editMessageText(
+            ctx.callbackQuery.message.text + `\n\n✅ **Request Granted & User Added.**\nReady to notify the user when the workflow is live.`,
+            { parse_mode: 'Markdown', ...notifyKeyboard }
+        );
+
     } catch (e) {
-        await ctx.reply(`⚠️ Request ${refId} granted, but an error occurred during processing: ${e.message}`);
+        await ctx.reply(`⚠️ An error occurred while granting request ${refId}: ${e.message}`);
+        console.error(e);
     }
+    // Note: We DO NOT delete pendingRequests[refId] here. It's deleted after notification.
+});
+
+bot.action(/^admin_notify_live:/, async (ctx) => {
+    if (ctx.from.id !== ADMIN_CHAT_ID) return;
+    const refId = ctx.match.input.split(':')[1];
+    const requestData = pendingRequests[refId];
+    if (!requestData) return ctx.reply(`❌ Error: Request ID \`${refId}\` not found or already processed.`);
 
     try {
         await ctx.telegram.sendMessage(
             requestData.userId,
-            `🎉 **SUCCESS!** Your custom card request has been approved and you are now authorized!\n\nYour chosen **unique secret word** is:\n\`${requestData.trigger}\`\n\nUse this word to get your card. If for someone else, share this link with them: https://t.me/Wish\\_ind\\_bot`,
+            `🎉 **Your Workflow is LIVE!** 🎉\n\nYour custom card request has been fulfilled and is now active. You can test it using your unique secret word:\n\n\`${requestData.trigger}\`\n\nIf this card is for someone else, you can share this link with them: https://t.me/Wish\\_ind\\_bot`,
             { parse_mode: 'Markdown' }
         );
+
+        await ctx.editMessageText(ctx.callbackQuery.message.text + '\n\n*➡️ User has been notified successfully.*', {
+             parse_mode: 'Markdown'
+        });
+
     } catch (error) {
-         await ctx.reply(`❌ Failed to send confirmation to user ${requestData.userId}. They may have blocked the bot.`);
+         await ctx.reply(`❌ Failed to send notification to user ${requestData.userId}. They may have blocked the bot.`);
+         console.error(error);
     }
+
     delete pendingRequests[refId];
 });
+
 
 bot.action(/^admin_decline_init:/, async (ctx) => {
     if (ctx.from.id !== ADMIN_CHAT_ID) return;
     const refId = ctx.match.input.split(':')[1];
     const requestData = pendingRequests[refId];
     if (!requestData) return ctx.reply(`❌ Error: Request ID \`${refId}\` not found.`);
-    
+
     userStates[ADMIN_CHAT_ID] = { state: "awaiting_decline_reason", data: { refId, originalMessageId: ctx.callbackQuery.message.message_id } };
-    
+
     await ctx.editMessageReplyMarkup(Markup.inlineKeyboard([[Markup.button.callback(`❌ DECLINING...`, 'ignore')]]).reply_markup);
     await ctx.reply(
         `Please reply with the **reason** for declining request \`${refId}\`, or click to skip.`,
@@ -352,7 +375,7 @@ bot.action(/^admin_decline_final:/, async (ctx) => {
     const reason = reasonEncoded && reasonEncoded !== 'no_comment' ? decodeURIComponent(reasonEncoded) : null;
     const requestData = pendingRequests[refId];
     if (!requestData) return ctx.reply(`❌ Error: Request ID \`${refId}\` not found.`);
-    
+
     const userMessage = `❌ **Your request has been declined.**\n${reason ? `Reason: *${reason}*\n` : ''}Your payment of ₹${REQUEST_FEE} will be refunded to your UPI ID (\`${requestData.refundUpi}\`) within 24 hours.`;
     await ctx.telegram.sendMessage(requestData.userId, userMessage, { parse_mode: 'Markdown' });
     await ctx.reply(`✅ Request ${refId} successfully declined. User notified.`, { reply_to_message_id: userStates[ADMIN_CHAT_ID]?.data?.originalMessageId });
@@ -364,7 +387,7 @@ bot.on(['photo', 'document'], async (ctx) => {
     const userId = ctx.from.id;
     const isPhoto = ctx.message.photo;
     const isDocument = ctx.message.document;
-    
+
     let fileId = null;
     let caption = ctx.message.caption;
 
@@ -378,23 +401,24 @@ bot.on(['photo', 'document'], async (ctx) => {
     }
 
     const state = userStates[userId];
-    
+
     if (state?.state === "awaiting_request_image") {
         await sendTypingAction(ctx);
         state.data.cardImageId = fileId;
         state.data.cardImageCaption = caption || 'No caption provided';
         state.state = "awaiting_payment_screenshot";
-        
+
         await ctx.reply("✅ Card Image received. Proceeding to payment step...");
         await sendTypingAction(ctx);
-        
+
         const captionHtml = `
 <b>💰 Payment Required</b>
-Please pay a standard fee of <i>₹${REQUEST_FEE}</i>. Pay via the QR code above or VPA: <code>${BOT_ADMIN_VPA}</code>.
-And if you would like to include the Shagun feature with your request, please send an extra ₹500 making a total of ₹550.
+Please pay a standard fee of <i>₹${REQUEST_FEE}</i>. Pay via the QR code above or VPA: <code>${BOT_ADMIN_VPA}</code>.<br>
+And if you would like to include the Shagun feature with your request, please send an extra ₹500 making a total of ₹550.<br><br>
 ℹ️ What is the Shagun feature?
-- After a user gives a rating, they will get a message asking if they would like a surprise gift. If they tap “Yes”, the bot will ask for their UPI ID. It will randomly pick a number between 1 and 500 — that number becomes their Shagun amount, sent by the admin.
-The rest of the ₹500 will be refunded to the same UPI ID.
+- After a user gives a rating, they will get a message asking if they would like a surprise gift. If they tap “Yes”, the bot will ask for their UPI ID. It will randomly pick a number between 1 and 500 — that number becomes their Shagun amount, sent by the admin.<br>
+The rest of the ₹500 will be refunded to the same UPI ID you just gave us.<br>
+If no Shagun amount is claimed, you’ll receive a full refund of your ₹500.<br>
 For any unresolved issues, use /masters_social.`.trim();
 
         if (fs.existsSync(UPI_QR_CODE_PATH)) {
@@ -402,20 +426,20 @@ For any unresolved issues, use /masters_social.`.trim();
         } else {
              await ctx.replyWithHTML(captionHtml);
         }
-        
+
         await sendTypingAction(ctx);
         return ctx.replyWithMarkdown("💳 Once payment is successful, please reply to this chat with the **screenshot of your payment**.\n\n⚠️ **Payment has to be done within 7 days before 11:59pm IST.**");
     }
-    
+
     if (state?.state === "awaiting_payment_screenshot") {
         await sendTypingAction(ctx);
         state.data.paymentScreenshotId = fileId;
-        
+
         await ctx.reply("✅ Screenshot received. Your request is now being reviewed! Please wait for admin confirmation.");
-        
+
         const requestData = state.data;
         const refId = `REQ${Date.now()}`;
-        
+
         pendingRequests[refId] = { userId, ...requestData };
 
         const notificationText = `
@@ -427,19 +451,19 @@ Phone: \`${requestData.phone}\`
 Date Needed: \`${requestData.date}\`
 Trigger Word: \`${requestData.trigger}\`
 Refund UPI: \`${requestData.refundUpi}\``.trim();
-        
+
         const adminKeyboard = Markup.inlineKeyboard([
             [Markup.button.callback("✅ Grant Request & Add User", `admin_grant_request:${refId}`)],
             [Markup.button.callback("❌ Decline Request", `admin_decline_init:${refId}`)],
         ]);
-        
+
         const sentMessage = await ctx.telegram.sendMessage(ADMIN_CHAT_ID, notificationText, { parse_mode: 'Markdown', ...adminKeyboard });
-        
+
         await ctx.telegram.sendMessage(ADMIN_CHAT_ID, `**[REQ ${refId}] FILES FOR REVIEW:**`, { parse_mode: 'Markdown', reply_to_message_id: sentMessage.message_id });
-        
+
         await ctx.telegram.sendPhoto(ADMIN_CHAT_ID, requestData.cardImageId, { caption: `Card Image for ${requestData.name} (Ref ID: ${refId})`, reply_to_message_id: sentMessage.message_id });
         await ctx.telegram.sendPhoto(ADMIN_CHAT_ID, requestData.paymentScreenshotId, { caption: `Payment Proof for ${requestData.name} (Ref ID: ${refId})`, reply_to_message_id: sentMessage.message_id });
-        
+
         delete userStates[userId];
     }
 });
@@ -457,11 +481,11 @@ bot.on("contact", async (ctx) => {
         state.state = "awaiting_request_trigger";
         return ctx.replyWithMarkdown(`✅ Phone received: \`${normalizedNumber}\`\n\n**Step 3 of 6**\nPlease reply with the **unique trigger word** for your bot:`, Markup.removeKeyboard());
     }
-  
+
     if (state?.state === "awaiting_contact") {
         const { potentialPhoneNumber, potentialName } = state.data;
         userStates[userId].state = null;
-        
+
         if (normalizedNumber === potentialPhoneNumber && AUTHORIZED_USERS_MAP[normalizedNumber]) {
             userStates[userId].data.matchedName = potentialName;
             userStates[userId].data.matchedPhone = normalizedNumber;
@@ -483,7 +507,7 @@ bot.on("text", async (ctx) => {
     const text = ctx.message.text.trim();
     const lowerText = text.toLowerCase();
     const currentState = userStates[userId]?.state;
-    
+
     if (userId === ADMIN_CHAT_ID && currentState === "awaiting_decline_reason") {
         const { refId, originalMessageId } = userStates[userId].data;
         await ctx.reply(`Reason received. Declining request ${refId}...`, { reply_to_message_id: originalMessageId });
@@ -512,7 +536,7 @@ bot.on("text", async (ctx) => {
                 state.data.date = text; state.state = "awaiting_request_upi";
                 return ctx.replyWithMarkdown(`✅ Date/Time received: *${text}*\n\n**Step 5 of 6**\nPlease provide your **UPI ID** for refunds.`);
             case "awaiting_request_upi":
-                if (!isValidUpiId(text)) return ctx.reply("❌ Invalid UPI ID format. It should be `name@bank`.");
+                if (!isValidUpiId(text)) return ctx.reply("❌ Invalid UPI ID format. It should be \`name@bank\`.`);
                 state.data.refundUpi = text; state.state = "awaiting_request_image";
                 return ctx.replyWithMarkdown(`✅ Refund UPI ID: \`${text}\`\n\n**Step 6 of 6**\nPlease send the **Image** for the card.`);
         }
@@ -522,15 +546,15 @@ bot.on("text", async (ctx) => {
     if (currentState === "awaiting_upi") {
         if (!isValidUpiId(lowerText)) return ctx.reply("❌ Invalid UPI ID. Please try again.");
         await ctx.reply(`✅ Received UPI ID: \`${lowerText}\`.`, { parse_mode: 'Markdown' });
-        
+
         userStates[userId].state = "spinning";
-        userStates[userId].data.upiId = lowerText; 
-        const giftAmount = Math.floor(Math.random() * 500) + 1; 
+        userStates[userId].data.upiId = lowerText;
+        const giftAmount = Math.floor(Math.random() * 500) + 1;
         userStates[userId].data.amount = giftAmount;
 
         const message = await ctx.reply("🎁 Spinning the wheel...");
         const messageId = message.message_id;
-        const spinDuration = 4000;
+        const spinDuration = 2500; // MODIFIED: Faster spin duration
         const startTime = Date.now();
         const spinIcon = '🎰';
 
@@ -545,13 +569,13 @@ bot.on("text", async (ctx) => {
                 await ctx.telegram.editMessageText(ctx.chat.id, messageId, undefined, `🛑 Stopping at... *₹${giftAmount}*!`, { parse_mode: 'Markdown' });
                 await new Promise(r => setTimeout(r, 1000));
                 await ctx.replyWithMarkdown(`🎉 You get a shagun of *₹${giftAmount}*!`);
-                await ctx.reply("Click below to claim:", Markup.inlineKeyboard([Markup.button.callback(`🎁 Ask for Shagun (₹${giftAmount})`, "ask_for_gift")]));
+                await ctx.reply("Click below to claim your shagun:", Markup.inlineKeyboard([Markup.button.callback(`🎁 Ask for Shagun (₹${giftAmount})`, "ask_for_gift")]));
                 userStates[userId].state = null;
             }
-        }, 800);
-        return; 
+        }, 150); // MODIFIED: Faster update interval
+        return;
     }
-  
+
     if (currentState === "awaiting_contact") return ctx.reply('Please use the "Share Contact" button.');
     if (currentState === "spinning") return ctx.reply('Please wait, the wheel is spinning... 🧐');
 
@@ -596,7 +620,7 @@ bot.action(/^rating_/, async (ctx) => {
   await ctx.editMessageText(`Thank you for your rating of ${rating} ⭐!`);
   const username = ctx.from.username || ctx.from.first_name;
   await ctx.telegram.sendMessage(ADMIN_CHAT_ID, `User @${username} (Chat ID: \`${ctx.chat.id}\`) rated ${rating} ⭐`, { parse_mode: 'Markdown'});
-  
+
   if (matchedPhone && AUTHORIZED_USERS_MAP[matchedPhone]?.can_claim_gift) {
     await ctx.replyWithMarkdown("Would you like a *bonus mystery gift*? 👀", Markup.inlineKeyboard([
         [Markup.button.callback("Yes, I want a gift! 🥳", "gift_yes")],
@@ -619,9 +643,9 @@ bot.action('ask_for_gift', async (ctx) => {
     const state = userStates[userId];
     if (!state?.data.upiId || !state.data.amount) return ctx.reply("Sorry, details lost. Please restart.");
     const { upiId, amount } = state.data;
-    const refId = `BDAYGIFT${Date.now()}`; 
+    const refId = `BDAYGIFT${Date.now()}`;
     pendingGifts[refId] = { userId, userUpi: upiId, amount };
-    await ctx.editMessageText("⏳ Waiting for confirmation..."); 
+    await ctx.editMessageText("⏳ Waiting for confirmation...\nThis might take a bit, so feel free to keep the chat open or close the app and carry on with your stuff.\nI’ll let you know as soon as I get the confirmation.");
     const adminNotificationText = `🚨 *NEW GIFT PAYMENT REQUIRED*\nTo User ID: \`${userId}\`\nAmount: *₹${amount}*\nUPI ID: \`${upiId}\`\nRef ID: \`${refId}\``;
     await ctx.telegram.sendMessage(ADMIN_CHAT_ID, adminNotificationText, { parse_mode: 'Markdown', ...Markup.inlineKeyboard([Markup.button.callback(`🚀 Initialize Payment Link (₹${amount})`, `admin_init_pay:${refId}`)]) });
 });
@@ -635,9 +659,9 @@ bot.action(/^admin_init_pay:/, async (ctx) => {
     const upiLink = `upi://pay?pa=${userUpi}&am=${amount}&pn=Bday%20Gift&tr=${refId}`;
     const redirectId = Math.random().toString(36).substring(2, 15);
     redirectLinkStore[redirectId] = upiLink;
-    finalConfirmationMap[refId] = userId; 
+    finalConfirmationMap[refId] = userId;
     const httpsRedirectLink = `${BOT_PUBLIC_BASE_URL}/pay-redirect?id=${redirectId}`;
-    await bot.telegram.sendMessage(userId, "✨ Your gift is being processed...");
+    await bot.telegram.sendMessage(userId, "✨ Your gift is being processed...\nWait for few minutes.");
     await ctx.editMessageText(ctx.callbackQuery.message.text + `\n\n🔗 *Payment Link for ₹${amount}* to \`${userUpi}\``, {
         parse_mode: 'Markdown', ...Markup.inlineKeyboard([Markup.button.url("🔥 Click to Pay via UPI App", httpsRedirectLink)])
     });
@@ -679,9 +703,9 @@ async function main() {
         console.error("❌ FATAL: BOT_PUBLIC_BASE_URL / RENDER_EXTERNAL_URL is not set.");
         process.exit(1);
     }
-    
+
     await loadAuthorizedUsers();
-    
+
     const WEBHOOK_PATH = `/telegraf/${bot.secretPathComponent()}`;
     await bot.telegram.setWebhook(`${BOT_PUBLIC_BASE_URL}${WEBHOOK_PATH}`);
     app.use(bot.webhookCallback(WEBHOOK_PATH));
@@ -691,7 +715,7 @@ async function main() {
         console.log(`🚀 Bot server running on port ${PORT}`);
         console.log(`🔗 Admin Dashboard available at ${BOT_PUBLIC_BASE_URL}/dashboard.html`);
     });
-    
+
     process.once("SIGINT", () => bot.stop("SIGINT"));
     process.once("SIGTERM", () => bot.stop("SIGTERM"));
 }
