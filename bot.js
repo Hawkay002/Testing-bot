@@ -258,9 +258,9 @@ function getMainMenu() {
 
 bot.command('dashboard', async (ctx) => {
     if (ctx.from.id !== ADMIN_CHAT_ID) return;
-    // FIXED: The URL should NOT include '/public/'
+    // MODIFIED: Use the hardcoded URL provided by the user
     await ctx.reply('Click the button below to open the new, powerful admin dashboard.', Markup.keyboard([
-        [Markup.button.webApp('🚀 Launch Admin Dashboard', `${BOT_PUBLIC_BASE_URL}/dashboard.html`)]
+        [Markup.button.webApp('🚀 Launch Admin Dashboard', 'https://testing-bot-v328.onrender.com/dashboard.html')]
     ]).resize());
 });
 
