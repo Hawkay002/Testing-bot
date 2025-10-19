@@ -413,13 +413,15 @@ bot.on(['photo', 'document'], async (ctx) => {
 
         const captionHtml = `
 <b>💰 Payment Required</b>
-Please pay a standard fee of <i>₹${REQUEST_FEE}</i>. Pay via the QR code above or VPA: <code>${BOT_ADMIN_VPA}</code>.<br>
-And if you would like to include the Shagun feature with your request, please send an extra ₹500 making a total of ₹550.<br><br>
-ℹ️ What is the Shagun feature?
-- After a user gives a rating, they will get a message asking if they would like a surprise gift. If they tap “Yes”, the bot will ask for their UPI ID. It will randomly pick a number between 1 and 500 — that number becomes their Shagun amount, sent by the admin.<br>
-The rest of the ₹500 will be refunded to the same UPI ID you just gave us.<br>
-If no Shagun amount is claimed, you’ll receive a full refund of your ₹500.<br>
-For any unresolved issues, use /masters_social.`.trim();
+Please pay a standard fee of <i>₹${REQUEST_FEE}</i>. Pay via the QR code above or VPA: <code>${BOT_ADMIN_VPA}</code>.
+And if you would like to include the Shagun feature with your request, please send an extra ₹500 making a total of ₹550.
+
+<b>ℹ️ What is the Shagun feature?</b>
+• After a user gives a rating, they will get a message asking if they would like a surprise gift. If they tap “Yes”, the bot will ask for their UPI ID. It will randomly pick a number between 1 and 500 — that number becomes their Shagun amount, sent by the admin.
+• The rest of the ₹500 will be refunded to the same UPI ID you just gave us.
+• If no Shagun amount is claimed, you’ll receive a full refund of your ₹500.
+• For any unresolved issues, use /masters_social.
+`.trim();
 
         if (fs.existsSync(UPI_QR_CODE_PATH)) {
             await ctx.replyWithPhoto({ source: UPI_QR_CODE_PATH }, { caption: captionHtml, parse_mode: 'HTML' });
