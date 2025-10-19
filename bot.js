@@ -536,7 +536,7 @@ bot.on("text", async (ctx) => {
                 state.data.date = text; state.state = "awaiting_request_upi";
                 return ctx.replyWithMarkdown(`✅ Date/Time received: *${text}*\n\n**Step 5 of 6**\nPlease provide your **UPI ID** for refunds.`);
             case "awaiting_request_upi":
-                if (!isValidUpiId(text)) return ctx.reply("❌ Invalid UPI ID format. It should be \`name@bank\`.`);
+                if (!isValidUpiId(text)) return ctx.reply("❌ Invalid UPI ID format. It should be `name@bank`.");
                 state.data.refundUpi = text; state.state = "awaiting_request_image";
                 return ctx.replyWithMarkdown(`✅ Refund UPI ID: \`${text}\`\n\n**Step 6 of 6**\nPlease send the **Image** for the card.`);
         }
