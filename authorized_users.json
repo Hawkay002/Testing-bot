@@ -13,7 +13,8 @@
   },
   "8276829124": {
     "name": "Nssk",
-    "trigger_word": "jwiiwjw"
+    "trigger_word": "jwiiwjw",
+    "can_claim_gift": false
   },
   "6291539754": {
     "name": "Rinky (Tiyasha Debnath)",
