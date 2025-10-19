@@ -151,12 +151,15 @@ const authMiddleware = (req, res, next) => {
         }
 
         const user = JSON.parse(params.get('user'));
-        if (user.id !== ADMIN_CHAT_ID) {
-            return res.status(403).json({ error: 'Access Denied. You are not the administrator.' });
+
+        // --- FIXED: Compare values as strings to prevent type mismatch issues ---
+        if (String(user.id) !== String(ADMIN_CHAT_ID)) {
+            return res.status(403).json({ error: `Access Denied. User ID ${user.id} is not the administrator.` });
         }
 
         next();
     } catch (error) {
+        console.error('Error in auth middleware:', error);
         return res.status(500).json({ error: 'Internal server error during authentication.' });
     }
 };
@@ -257,8 +260,7 @@ function getMainMenu() {
 }
 
 bot.command('dashboard', async (ctx) => {
-    if (ctx.from.id !== ADMIN_CHAT_ID) return;
-    // MODIFIED: Use the hardcoded URL provided by the user
+    if (String(ctx.from.id) !== String(ADMIN_CHAT_ID)) return;
     await ctx.reply('Click the button below to open the new, powerful admin dashboard.', Markup.keyboard([
         [Markup.button.webApp('🚀 Launch Admin Dashboard', 'https://testing-bot-v328.onrender.com/dashboard.html')]
     ]).resize());
@@ -301,7 +303,7 @@ bot.command('request', async (ctx) => {
 });
 
 bot.action(/^admin_grant_request:/, async (ctx) => {
-    if (ctx.from.id !== ADMIN_CHAT_ID) return;
+    if (String(ctx.from.id) !== String(ADMIN_CHAT_ID)) return;
     const refId = ctx.match.input.split(':')[1];
     const requestData = pendingRequests[refId];
     if (!requestData) return ctx.reply(`❌ Error: Request ID \`${refId}\` not found or expired.`);
@@ -340,7 +342,7 @@ bot.action(/^admin_grant_request:/, async (ctx) => {
 });
 
 bot.action(/^admin_notify_live:/, async (ctx) => {
-    if (ctx.from.id !== ADMIN_CHAT_ID) return;
+    if (String(ctx.from.id) !== String(ADMIN_CHAT_ID)) return;
     const refId = ctx.match.input.split(':')[1];
     const requestData = pendingRequests[refId];
     if (!requestData) return ctx.reply(`❌ Error: Request ID \`${refId}\` not found or already processed.`);
@@ -366,7 +368,7 @@ bot.action(/^admin_notify_live:/, async (ctx) => {
 
 
 bot.action(/^admin_decline_init:/, async (ctx) => {
-    if (ctx.from.id !== ADMIN_CHAT_ID) return;
+    if (String(ctx.from.id) !== String(ADMIN_CHAT_ID)) return;
     const refId = ctx.match.input.split(':')[1];
     const requestData = pendingRequests[refId];
     if (!requestData) return ctx.reply(`❌ Error: Request ID \`${refId}\` not found.`);
@@ -381,7 +383,7 @@ bot.action(/^admin_decline_init:/, async (ctx) => {
 });
 
 bot.action(/^admin_decline_final:/, async (ctx) => {
-    if (ctx.from.id !== ADMIN_CHAT_ID) return;
+    if (String(ctx.from.id) !== String(ADMIN_CHAT_ID)) return;
     const [, refId, reasonEncoded] = ctx.match.input.split(':');
     const reason = reasonEncoded && reasonEncoded !== 'no_comment' ? decodeURIComponent(reasonEncoded) : null;
     const requestData = pendingRequests[refId];
@@ -521,7 +523,7 @@ bot.on("text", async (ctx) => {
     const lowerText = text.toLowerCase();
     const currentState = userStates[userId]?.state;
 
-    if (userId === ADMIN_CHAT_ID && currentState === "awaiting_decline_reason") {
+    if (String(userId) === String(ADMIN_CHAT_ID) && currentState === "awaiting_decline_reason") {
         const { refId, originalMessageId } = userStates[userId].data;
         await ctx.reply(`Reason received. Declining request ${refId}...`, { reply_to_message_id: originalMessageId });
         return bot.handleUpdate({
@@ -664,7 +666,7 @@ bot.action('ask_for_gift', async (ctx) => {
 });
 
 bot.action(/^admin_init_pay:/, async (ctx) => {
-    if(ctx.from.id !== ADMIN_CHAT_ID) return;
+    if (String(ctx.from.id) !== String(ADMIN_CHAT_ID)) return;
     const refId = ctx.match.input.split(':')[1];
     const giftData = pendingGifts[refId];
     if (!giftData) return ctx.editMessageText("❌ Error: Payment reference expired.");
@@ -685,7 +687,7 @@ bot.action(/^admin_init_pay:/, async (ctx) => {
 });
 
 bot.action(/^payment_done:/, async (ctx) => {
-    if(ctx.from.id !== ADMIN_CHAT_ID) return;
+    if (String(ctx.from.id) !== String(ADMIN_CHAT_ID)) return;
     const refId = ctx.match.input.split(':')[1];
     const targetUserId = finalConfirmationMap[refId];
     if (!targetUserId) return ctx.editMessageText("❌ Error: Could not determine target user.");
